@@ -148,10 +148,7 @@ def test_dashboard_pack_loads():
         "forecast_change", "data_gap",
     ]
     assert "reference market" in pack.default_market_rule
-    rainfall = next(
-        s for s in pack.unstateable_subjects if s.subject == "rainfall"
-    )
-    assert "not a rainfall reading" in rainfall.gap_needed
+    assert "not a rainfall reading" in pack.unstateable_subjects["rainfall"]
 
 
 # --- the grammar --------------------------------------------------------------
@@ -379,6 +376,7 @@ def test_diff_figure_changed_unit():
     def panel(value):
         return ResolvedPanel(
             panel_no=1,
+            kind="forecast",
             title="Wheat — forecast (Delhi Khari Baoli)",
             state="rendered",
             figures=[
@@ -524,10 +522,16 @@ def test_board_exceptions(env):
                 by_asof[f.as_of] = f
         ordered = [by_asof[d] for d in sorted(by_asof)]
         assert len(ordered) >= 2
-        expected = round(
-            ordered[-1].path[29].p50_paise - ordered[-2].path[29].p50_paise, 2
-        )
-        assert row.figures["dp50_30d_paise"] == expected
+
+        def p50_30(forecast):
+            return next(
+                s.p50 for s in forecast.horizons_summary
+                if s.horizon_days == 30
+            )
+
+        expected = round(p50_30(ordered[-1]) - p50_30(ordered[-2]), 2)
+        assert expected != 0
+        assert row.figures["delta_p50_30"] == expected
         assert row.artefact_id == ordered[-1].forecast_id
     # every row's artefact resolves in the store
     for row in board.rows:
