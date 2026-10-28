@@ -98,6 +98,66 @@ def main() -> int:
             json={"commodity": "wheat", "market": "indore", "as_of": "2026-02-01"},
         )
         checks.append(("sealed window refused over HTTP", r.status_code == 403))
+        r = client.post(
+            f"{BASE}/forecasts/run", json={"commodity": "chili", "market": "guntur"}
+        )
+        pre_accuracy = r.json()["accuracy"]["state"] if r.status_code == 200 else None
+        checks.append(
+            ("forecast before backtests is named unmeasured", pre_accuracy == "unmeasured")
+        )
+        with httpx.Client(trust_env=False, timeout=180) as slow:
+            r = slow.post(f"{BASE}/backtests/run", json={})
+        checks.append(
+            (
+                "backtest harness run",
+                r.status_code == 200
+                and r.json()["results_stored"] == 405
+                and r.json()["ledger_records"] == 42
+                and len(r.json()["skipped"]) == 5,
+            )
+        )
+        r = client.get("/accuracy/chili/guntur/30")
+        checks.append(
+            (
+                "chili/guntur 30d record is degraded",
+                r.status_code == 200 and r.json()["degraded"] is True and r.json()["mape"] > 5.0,
+            )
+        )
+        r = client.get("/accuracy/wheat/delhi_khari_baoli/30")
+        checks.append(
+            (
+                "wheat/delhi 30d record is measured, not degraded",
+                r.status_code == 200 and r.json()["degraded"] is False,
+            )
+        )
+        checksel = client.get("/backtests", params={"commodity": "coffee"})
+        checks.append(
+            ("coffee backtest results listed", checksel.status_code == 200 and len(checksel.json()["results"]) == 15)
+        )
+        r = client.post(
+            f"{BASE}/forecasts/run", json={"commodity": "chili", "market": "guntur"}
+        )
+        chili_id = r.json()["forecast_id"] if r.status_code == 200 else None
+        checks.append(
+            (
+                "fresh chili forecast carries the degraded flag",
+                r.status_code == 200 and r.json()["accuracy"]["state"] == "degraded",
+            )
+        )
+        r = client.get(f"{BASE}/forecasts/{chili_id}/accuracy")
+        checks.append(
+            (
+                "forecast accuracy read",
+                r.status_code == 200 and r.json()["accuracy"]["state"] == "degraded",
+            )
+        )
+        r = client.get(f"{BASE}/forecasts/{chili_id}", params={"view": "clean"})
+        checks.append(
+            (
+                "the flag cannot be suppressed by a view parameter",
+                r.status_code == 200 and r.json()["accuracy"]["state"] == "degraded",
+            )
+        )
         for name, ok in checks:
             print(f"  {'PASS' if ok else 'FAIL'}  {name}")
         return 0 if all(ok for _, ok in checks) else 1

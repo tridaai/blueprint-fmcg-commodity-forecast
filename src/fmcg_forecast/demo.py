@@ -103,6 +103,37 @@ def main() -> int:
           f"{coffee_fc.missing_drivers}; sparsity widening x{coffee_fc.method.sparsity.multiplier} "
           f"(wheat x{wheat.method.sparsity.multiplier}); 30d band {h30.p10:.2f}..{h30.p90:.2f} "
           f"around P50 {h30.p50:.2f}")
+    print(f"  note: those forecasts were run before any backtest existed — their "
+          f"accuracy reads '{coffee_fc.accuracy.state}', named on the artefact")
+
+    print("\n--- backtesting + the accuracy ledger (R3): every forecast carries its measured accuracy ---")
+    from fmcg_forecast.backtest.harness import run_all
+
+    report, records = run_all(store)
+    print(f"harness: {report.engine_runs} engine runs at monthly 2025 origins, "
+          f"{report.results_stored} results stored, {len(report.skipped)} origins skipped")
+    for skip in report.skipped:
+        print(f"  skipped {skip['commodity']}/{skip['market']} @ {skip['origin']}: "
+              f"{skip['reason'].split(';')[0]}")
+    print(f"ledger: {len(records)} accuracy records (14 series x 3 horizons), pooled "
+          f"over the most recent 6 origins, degraded bar = pooled MAPE above 5.0%")
+    for record in records:
+        if record.commodity in ("wheat", "chili", "coffee"):
+            flag = "  <-- DEGRADED" if record.degraded else ""
+            print(f"  {record.commodity}/{record.market} {record.horizon_days:>2}d: "
+                  f"MAPE {record.mape:.2f}%  bias {record.bias:+.2f}  coverage "
+                  f"{record.coverage:.2f}  over {record.n_results} origins{flag}")
+
+    chili = service.run_forecast("chili", "guntur")
+    print(f"\nchili/guntur forecast {chili.forecast_id} carries accuracy: {chili.accuracy.state}")
+    print(f"  {chili.accuracy.note}")
+    chili_commentary = service.draft_commentary(chili.forecast_id)
+    print(f"  commentary states it too: 'Backtest accuracy state: degraded' "
+          f"in text -> {'Backtest accuracy state: degraded' in chili_commentary.text}")
+    wheat2 = service.run_forecast("wheat", "indore")
+    print(f"wheat/indore forecast {wheat2.forecast_id} carries accuracy: "
+          f"{wheat2.accuracy.state} (a fresh run pins the ledger as it now stands; "
+          f"the pre-backtest run above keeps its unmeasured snapshot)")
     print(f"sealed truth rows stored: {truth_store.count()} (readable only via the truth store)")
     return 0
 
