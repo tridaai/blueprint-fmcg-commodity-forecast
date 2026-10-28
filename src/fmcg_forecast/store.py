@@ -15,6 +15,12 @@ from datetime import date
 from pathlib import Path
 from typing import Protocol
 
+from fmcg_forecast.dashboards.models import (
+    DashboardAssembly,
+    DashboardSpec,
+    DashboardView,
+    DeskBoard,
+)
 from fmcg_forecast.events.models import MarketEvent
 from fmcg_forecast.forecast.models import (
     AccuracyRecord,
@@ -124,6 +130,25 @@ class Store(Protocol):
     def get_scenario_adoption(
         self, scenario_id: str
     ) -> ScenarioAdoption | None: ...
+    # -- dashboards + desk board (R7) --------------------------------
+    def insert_dashboard_spec(self, spec: DashboardSpec) -> None: ...
+    def get_dashboard_spec(self, spec_id: str) -> DashboardSpec | None: ...
+    def list_dashboard_specs(self) -> list[DashboardSpec]: ...
+    def insert_dashboard_assembly(self, assembly: DashboardAssembly) -> None: ...
+    def get_dashboard_assembly(
+        self, assembly_id: str
+    ) -> DashboardAssembly | None: ...
+    def list_dashboard_assemblies(
+        self, spec_id: str | None = None
+    ) -> list[DashboardAssembly]: ...
+    def insert_dashboard_view(self, view: DashboardView) -> None: ...
+    def get_dashboard_view(self, view_id: str) -> DashboardView | None: ...
+    def list_dashboard_views(
+        self, name: str | None = None
+    ) -> list[DashboardView]: ...
+    def insert_desk_board(self, board: DeskBoard) -> None: ...
+    def get_desk_board(self, board_id: str) -> DeskBoard | None: ...
+    def list_desk_boards(self) -> list[DeskBoard]: ...
     def close(self) -> None: ...
 
 
@@ -897,6 +922,154 @@ class SqlStore:
         )
         row = cur.fetchone()
         return ScenarioAdoption.model_validate(json.loads(row[0])) if row else None
+
+    # -- dashboards + desk board (R7) ----------------------------------
+    # Specs, assemblies, views and boards are insert-only, like
+    # every other artefact: the service checks the content address
+    # before inserting, so a re-ask / re-assembly / rebuild is a
+    # no-op rather than a duplicate-write error. An assembly's
+    # payload is stored whole (HTML included): the page is a pure
+    # function of the resolved panels, and the verifier re-renders
+    # it byte-for-byte from the stored spec + panels.
+
+    def insert_dashboard_spec(self, spec: DashboardSpec) -> None:
+        sql = self._q(
+            "INSERT INTO dashboard_specs (spec_id, prompt, asked_by, "
+            "payload) VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (spec.spec_id, spec.prompt, spec.asked_by, spec.model_dump_json()),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_dashboard_spec(self, spec_id: str) -> DashboardSpec | None:
+        cur = self._conn.execute(
+            self._q("SELECT payload FROM dashboard_specs WHERE spec_id = ?"),
+            (spec_id,),
+        )
+        row = cur.fetchone()
+        return DashboardSpec.model_validate(json.loads(row[0])) if row else None
+
+    def list_dashboard_specs(self) -> list[DashboardSpec]:
+        cur = self._conn.execute(
+            "SELECT payload FROM dashboard_specs ORDER BY spec_id"
+        )
+        return [
+            DashboardSpec.model_validate(json.loads(r[0])) for r in cur.fetchall()
+        ]
+
+    def insert_dashboard_assembly(self, assembly: DashboardAssembly) -> None:
+        sql = self._q(
+            "INSERT INTO dashboard_assemblies (assembly_id, spec_id, "
+            "seq, payload) VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                assembly.assembly_id,
+                assembly.spec_id,
+                assembly.seq,
+                assembly.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_dashboard_assembly(
+        self, assembly_id: str
+    ) -> DashboardAssembly | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM dashboard_assemblies "
+                "WHERE assembly_id = ?"
+            ),
+            (assembly_id,),
+        )
+        row = cur.fetchone()
+        return (
+            DashboardAssembly.model_validate(json.loads(row[0])) if row else None
+        )
+
+    def list_dashboard_assemblies(
+        self, spec_id: str | None = None
+    ) -> list[DashboardAssembly]:
+        sql = "SELECT payload FROM dashboard_assemblies"
+        params: list = []
+        if spec_id is not None:
+            sql += " WHERE spec_id = ?"
+            params.append(spec_id)
+        sql += " ORDER BY spec_id, seq"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            DashboardAssembly.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    def insert_dashboard_view(self, view: DashboardView) -> None:
+        sql = self._q(
+            "INSERT INTO dashboard_views (view_id, spec_id, name, "
+            "payload) VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (view.view_id, view.spec_id, view.name, view.model_dump_json()),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_dashboard_view(self, view_id: str) -> DashboardView | None:
+        cur = self._conn.execute(
+            self._q("SELECT payload FROM dashboard_views WHERE view_id = ?"),
+            (view_id,),
+        )
+        row = cur.fetchone()
+        return DashboardView.model_validate(json.loads(row[0])) if row else None
+
+    def list_dashboard_views(
+        self, name: str | None = None
+    ) -> list[DashboardView]:
+        sql = "SELECT payload FROM dashboard_views"
+        params: list = []
+        if name is not None:
+            sql += " WHERE name = ?"
+            params.append(name)
+        sql += " ORDER BY name, view_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            DashboardView.model_validate(json.loads(r[0])) for r in cur.fetchall()
+        ]
+
+    def insert_desk_board(self, board: DeskBoard) -> None:
+        sql = self._q(
+            "INSERT INTO desk_boards (board_id, board_date, payload) "
+            "VALUES (?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                board.board_id,
+                self._date_param(board.board_date),
+                board.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_desk_board(self, board_id: str) -> DeskBoard | None:
+        cur = self._conn.execute(
+            self._q("SELECT payload FROM desk_boards WHERE board_id = ?"),
+            (board_id,),
+        )
+        row = cur.fetchone()
+        return DeskBoard.model_validate(json.loads(row[0])) if row else None
+
+    def list_desk_boards(self) -> list[DeskBoard]:
+        cur = self._conn.execute(
+            "SELECT payload FROM desk_boards ORDER BY board_date, board_id"
+        )
+        return [DeskBoard.model_validate(json.loads(r[0])) for r in cur.fetchall()]
 
     def close(self) -> None:
         self._conn.close()
