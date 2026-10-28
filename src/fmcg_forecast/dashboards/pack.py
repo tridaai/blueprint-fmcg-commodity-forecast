@@ -231,6 +231,11 @@ DASHBOARD_PACK_V1 = DashboardPack(
             "a contribution line inside the forecast artefact, "
             "not a standalone panel figure"
         ),
+        "arrivals": (
+            "a standalone arrivals figure — market arrivals are "
+            "a contribution line inside the forecast artefact, "
+            "not a standalone panel figure"
+        ),
     },
     default_market_rule=(
         "a prompt that names a commodity but no market is read "
