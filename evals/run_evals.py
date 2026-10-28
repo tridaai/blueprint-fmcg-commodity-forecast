@@ -67,6 +67,27 @@ zero-tolerance:
   coffee. (Eval-only composition: the gate hands truth rows to the
   harness's scoring; no product code reads the truth store.)
 
+Round 4 counters (sentiment, Law 3), also zero-tolerance:
+
+- sentiment_extraction_errors: a stored extraction disagreeing
+  with the planted intent anywhere in the 583-item corpus —
+  direction, strength, score or aspects on a clear item, or a
+  planted ambiguous/signalless item landing classified (or a
+  clear item landing unclassified).
+- sentiment_index_reperformance_failures: a stored weekly index
+  that does not recompute exactly from the stored extractions.
+- sentiment_contribution_errors: a forecast whose sentiment line
+  is not in the planted state for its commodity — estimated for
+  the five rich-corpus commodities, a named not-estimable line
+  (zero everywhere, in missing_drivers) for groundnut and
+  coffee — or whose decomposition fails re-performance.
+- sentiment_claim_violations_accepted: a commentary draft whose
+  sentiment claim is uncited or contradicts its cited items that
+  gets stored anyway; or an honest draft missing its citations.
+- sentiment_intent_isolation_violations: a scoring module
+  (pack/extract/index/verify/service/models) importing the
+  corpus or grading modules, or naming the intent table.
+
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
 
@@ -147,6 +168,11 @@ def main() -> int:
         "degraded_flag_suppressed": 0,
         "unmeasured_unnamed": 0,
         "sealed_check_failures": 0,
+        "sentiment_extraction_errors": 0,
+        "sentiment_index_reperformance_failures": 0,
+        "sentiment_contribution_errors": 0,
+        "sentiment_claim_violations_accepted": 0,
+        "sentiment_intent_isolation_violations": 0,
     }
 
     # --- planted events, measured seasonally-matched ---------------
@@ -489,7 +515,176 @@ def main() -> int:
             if horizon_sums["coverage"] < 0.80:
                 counters["sealed_check_failures"] += 1
 
-    print("Round 3 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger)")
+    # --- sentiment (R4, Law 3) --------------------------------------
+    # The gate loads the corpus and its grading store itself: the
+    # intent is grading-side truth, read here and in the loader
+    # only — the isolation counter below proves the scoring
+    # modules never touch it.
+    from fmcg_forecast.sentiment.corpus import expected_reading
+    from fmcg_forecast.sentiment.grading import build_sentiment_grading_store
+    from fmcg_forecast.sentiment.index import compute_index
+    from fmcg_forecast.sentiment.load import load_sentiment_corpus
+    from fmcg_forecast.sentiment.pack import load_sentiment_pack
+    from fmcg_forecast.sentiment.service import SentimentService
+
+    grading_store = build_sentiment_grading_store(str(tmp / "evals.db"))
+    load_sentiment_corpus(store, grading_store, manifest.seed)
+    sentiment = SentimentService(store, OfflineModel())
+    pipeline = sentiment.run_pipeline()
+    if pipeline["items"] != 583 or pipeline["unclassified"] != 98:
+        counters["sentiment_extraction_errors"] += 1
+
+    for extraction in sentiment.list_extractions():
+        intent = grading_store.get_intent(extraction.item_id)
+        expected = expected_reading(intent)
+        if extraction.status != expected["status"]:
+            counters["sentiment_extraction_errors"] += 1
+        elif expected["status"] == "classified" and (
+            extraction.direction != expected["direction"]
+            or extraction.strength != expected["strength"]
+            or extraction.score != expected["score"]
+            or extraction.aspects != expected["aspects"]
+        ):
+            counters["sentiment_extraction_errors"] += 1
+
+    counters["sentiment_index_reperformance_failures"] += len(
+        sentiment.verify_stored()["problems"]
+    )
+    sentiment_pack = load_sentiment_pack()
+    for commodity in ("wheat", "basmati_rice", "soybean", "groundnut", "chili", "cumin", "coffee"):
+        extractions = sentiment.list_extractions(commodity)
+        for index in sentiment.list_indices(commodity):
+            recomputed = compute_index(
+                commodity, index.week_start, extractions, sentiment_pack
+            )
+            if (
+                recomputed is None
+                or recomputed.value != index.value
+                or recomputed.index_id != index.index_id
+            ):
+                counters["sentiment_index_reperformance_failures"] += 1
+
+    wired = ForecastService(
+        store,
+        OfflineModel(),
+        sentiment_provider=sentiment.forecast_input,
+        sentiment_claim_verifier=sentiment.verify_claims,
+    )
+    estimable = {
+        "wheat": "delhi_khari_baoli",
+        "basmati_rice": "delhi_khari_baoli",
+        "soybean": "indore",
+        "chili": "guntur",
+        "cumin": "unjha",
+    }
+    not_estimable = {"groundnut": "rajkot", "coffee": "bengaluru"}
+    for commodity, market in estimable.items():
+        graded_forecast = wired.run_forecast(commodity, market)
+        line = next(
+            (l for l in graded_forecast.lines if l.driver == "sentiment"), None
+        )
+        if (
+            line is None
+            or line.input_summary.get("state") != "estimated"
+            or line.coefficient is None
+        ):
+            counters["sentiment_contribution_errors"] += 1
+        counters["sentiment_contribution_errors"] += len(
+            verify_forecast(graded_forecast)
+        )
+    for commodity, market in not_estimable.items():
+        graded_forecast = wired.run_forecast(commodity, market)
+        line = next(
+            (l for l in graded_forecast.lines if l.driver == "sentiment"), None
+        )
+        if (
+            line is None
+            or line.input_summary.get("state") != "not_estimable"
+            or line.coefficient is not None
+            or any(v != 0.0 for v in line.contribution_path_inr)
+            or "sentiment_not_estimable" not in graded_forecast.missing_drivers
+        ):
+            counters["sentiment_contribution_errors"] += 1
+        counters["sentiment_contribution_errors"] += len(
+            verify_forecast(graded_forecast)
+        )
+
+    honest_forecast = wired.run_forecast("wheat", "kanpur")
+    honest = wired.draft_commentary(honest_forecast.forecast_id)
+    honest_line = next(
+        l for l in honest_forecast.lines if l.driver == "sentiment"
+    )
+    for item_id in honest_line.input_summary["cited_item_ids"]:
+        if item_id not in honest.text:
+            counters["sentiment_claim_violations_accepted"] += 1
+
+    wheat_line_forecast = wired.run_forecast("wheat", "indore")
+    wheat_line = next(
+        l for l in wheat_line_forecast.lines if l.driver == "sentiment"
+    )
+    cited_ids = ", ".join(wheat_line.input_summary["cited_item_ids"])
+    wrong_word = (
+        "supportive"
+        if wheat_line.input_summary["latest_index_value"] < 0
+        else "headwind"
+    )
+
+    class _UncitedClaimModel(OfflineModel):
+        profile_name = "eval-uncited"
+
+        def draft_commentary(self, *, subject, figures):
+            return f"{subject}. Market sentiment reads supportive this month."
+
+    class _WrongDirectionModel(OfflineModel):
+        profile_name = "eval-wrong-direction"
+
+        def draft_commentary(self, *, subject, figures):
+            return (
+                f"{subject}. Sentiment reading (direction per cited "
+                f"items): {wrong_word} — items {cited_ids}."
+            )
+
+    for probe_model, probe_series in (
+        (_UncitedClaimModel(), ("soybean", "nagpur")),
+        (_WrongDirectionModel(), ("wheat", "indore")),
+    ):
+        probe_service = ForecastService(
+            store,
+            probe_model,
+            sentiment_provider=sentiment.forecast_input,
+            sentiment_claim_verifier=sentiment.verify_claims,
+        )
+        probe_forecast = probe_service.run_forecast(*probe_series)
+        try:
+            probe_service.draft_commentary(probe_forecast.forecast_id)
+            counters["sentiment_claim_violations_accepted"] += 1
+        except CommentaryVerificationError:
+            pass
+
+    sentiment_base = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "fmcg_forecast"
+        / "sentiment"
+    )
+    for module_name in ("pack.py", "extract.py", "index.py", "verify.py", "service.py", "models.py"):
+        module_text = (sentiment_base / module_name).read_text(encoding="utf-8")
+        if "sentiment_intent" in module_text:
+            counters["sentiment_intent_isolation_violations"] += 1
+        module_tree = ast.parse(module_text)
+        for node in ast.walk(module_tree):
+            names: list[str] = []
+            if isinstance(node, ast.Import):
+                names = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [node.module or ""]
+            for imported in names:
+                if imported.endswith(".corpus") or imported.endswith(".grading"):
+                    counters["sentiment_intent_isolation_violations"] += 1
+                if imported in ("corpus", "grading"):
+                    counters["sentiment_intent_isolation_violations"] += 1
+
+    print("Round 4 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]
