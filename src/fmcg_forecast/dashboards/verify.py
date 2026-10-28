@@ -167,26 +167,31 @@ def lineage_problems(store, figure: DashboardFigure) -> list[str]:
 
 
 def _family_problems(
-    store, events: EventService, sentiment_pack: SentimentPack, panel
+    store,
+    events: EventService,
+    sentiment_pack: SentimentPack,
+    spec_panel,
+    panel,
 ) -> list[str]:
     """Re-perform the artefacts behind one rendered panel with
-    their own family verifiers."""
+    their own family verifiers. Kind and scope come from the
+    spec panel; the resolved panel carries the artefacts."""
     problems: list[str] = []
-    if panel.kind == "forecast":
+    if spec_panel.kind == "forecast":
         from fmcg_forecast.dashboards.assemble import head_forecast
 
         head = head_forecast(
-            store, panel.scope["commodity"], panel.scope["market"]
+            store, spec_panel.scope["commodity"], spec_panel.scope["market"]
         )
         if head is not None:
             problems.extend(
                 f"forecast {head.forecast_id}: {p}"
                 for p in verify_forecast(head)
             )
-    elif panel.kind == "accuracy":
+    elif spec_panel.kind == "accuracy":
         pack = load_accuracy_pack()
         for record in store.list_accuracy_records(
-            panel.scope["commodity"], panel.scope["market"]
+            spec_panel.scope["commodity"], spec_panel.scope["market"]
         ):
             results = store.list_backtest_results(
                 record.commodity, record.market, record.horizon_days
@@ -195,8 +200,8 @@ def _family_problems(
                 f"accuracy record {record.record_id}: {p}"
                 for p in verify_accuracy_record(record, results, pack)
             )
-    elif panel.kind == "sentiment":
-        indices = store.list_indices(panel.scope["commodity"])
+    elif spec_panel.kind == "sentiment":
+        indices = store.list_indices(spec_panel.scope["commodity"])
         if indices:
             index = indices[-1]
             recomputed = compute_index(
@@ -210,7 +215,17 @@ def _family_problems(
                     f"sentiment index {index.index_id} does not "
                     "recompute from the stored extractions"
                 )
-    elif panel.kind == "scenario_diff":
+    elif spec_panel.kind == "events":
+        from fmcg_forecast.events.verify import verify_market_event
+
+        for event in store.list_market_events(
+            commodity=spec_panel.scope["commodity"]
+        ):
+            problems.extend(
+                f"event {event.event_id}: {p}"
+                for p in verify_market_event(event, events.pack)
+            )
+    elif spec_panel.kind == "scenario_diff":
         if panel.state == "rendered" and panel.artefact_ids:
             run = store.get_scenario(panel.artefact_ids[0])
             if run is not None:
@@ -317,7 +332,9 @@ def verify_assembly(
                 f"panel {resolved.panel_no}: {p}"
                 for p in lineage_problems(store, figure)
             )
-        problems.extend(_family_problems(store, events, sentiment_pack, resolved))
+        problems.extend(
+            _family_problems(store, events, sentiment_pack, spec_panel, resolved)
+        )
     if render_dashboard(spec, assembly) != assembly.html:
         problems.append(
             "the stored HTML does not re-render byte-for-byte from "

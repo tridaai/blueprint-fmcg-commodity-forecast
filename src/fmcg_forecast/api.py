@@ -17,7 +17,13 @@ planted historical shocks from the manifest, read any event with
 its transmission verdict on its face, read the what-happened
 impact view, and read any forecast's per-event lines — the desk's
 forecasts now run with the registry wired in, so a declared event
-whose window touches a run lands as its own named line. Every
+whose window touches a run lands as its own named line. Round 7
+adds the dashboard surface (Law 6): a plain-language prompt
+becomes a stated dashboard spec (catalogue panels or named gap
+panels), specs save as named views and assemble into verified
+static pages whose every figure carries its lineage to stored
+facts in a provenance appendix, plus the morning desk board —
+the exception inbox derived from artefacts only. Every
 response carries the request id the logging middleware assigned,
 so a figure on a desk screen can be traced to the exact stored
 rows behind it.
@@ -29,12 +35,20 @@ import logging
 from datetime import date
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from fmcg_forecast.backtest.harness import run_all as run_backtest_harness
 from fmcg_forecast.backtest.pack import load_accuracy_pack
 from fmcg_forecast.catalogue import COMMODITIES
+from fmcg_forecast.dashboards.pack import load_dashboard_pack
+from fmcg_forecast.dashboards.service import (
+    DashboardNotFoundError,
+    DashboardParseError,
+    DashboardService,
+    DashboardValidationError,
+    DashboardVerificationError,
+)
 from fmcg_forecast.events.service import (
     EventNotFoundError,
     EventService,
@@ -54,7 +68,11 @@ from fmcg_forecast.forecast.service import (
     ForecastService,
 )
 from fmcg_forecast.logging_config import new_request_id, request_id_var
-from fmcg_forecast.modelport import ModelPort, OfflineModel
+from fmcg_forecast.modelport import (
+    ModelNotConfiguredError,
+    ModelPort,
+    OfflineModel,
+)
 from fmcg_forecast.scenarios.models import LeverApplication
 from fmcg_forecast.scenarios.pack import load_scenario_pack
 from fmcg_forecast.scenarios.service import (
@@ -133,6 +151,22 @@ class AdoptScenarioRequest(BaseModel):
     decided_on: date | None = None
 
 
+class AskDashboardRequest(BaseModel):
+    prompt: str
+    asked_by: str
+    created_on: date | None = None
+
+
+class SaveViewRequest(BaseModel):
+    name: str
+    saved_by: str
+    saved_on: date | None = None
+
+
+class AssembleDashboardRequest(BaseModel):
+    assembled_on: date | None = None
+
+
 def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     model_port = model or OfflineModel()
     sentiment = SentimentService(store, model_port)
@@ -151,13 +185,17 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
         event_service,
         sentiment_provider=sentiment.forecast_input,
     )
+    dashboard_service = DashboardService(
+        store, model_port, event_service, sentiment
+    )
     app = FastAPI(
         title="FMCG Commodity Forecast — Operations API",
-        version="0.6.0",
+        version="0.7.0",
         description="Read surfaces for the commodity price & driver store, "
         "the governed forecast surface, the backtest/accuracy surface, "
-        "the sentiment surface, the event registry, and the scenario "
-        "studio.",
+        "the sentiment surface, the event registry, the scenario "
+        "studio, and the dashboard assembler with the morning desk "
+        "board.",
     )
 
     @app.middleware("http")
@@ -758,5 +796,120 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
                 f"{horizon_days} days — the harness has not covered it",
             )
         return found.model_dump(mode="json")
+
+    # -- dashboards + the morning board (R7, Law 6) ---------------------
+
+    @app.get("/dashboards/pack")
+    def dashboard_pack() -> dict:
+        return load_dashboard_pack().model_dump(mode="json")
+
+    @app.post("/dashboards/ask")
+    def ask_dashboard(body: AskDashboardRequest) -> dict:
+        try:
+            spec = dashboard_service.ask(
+                body.prompt, body.asked_by, body.created_on or date.today()
+            )
+        except DashboardParseError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except DashboardValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ModelNotConfiguredError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return spec.model_dump(mode="json")
+
+    @app.get("/dashboards/specs")
+    def list_dashboard_specs() -> dict:
+        found = dashboard_service.list_specs()
+        return {"specs": [s.model_dump(mode="json") for s in found]}
+
+    @app.get("/dashboards/specs/{spec_id}")
+    def get_dashboard_spec(spec_id: str) -> dict:
+        try:
+            return dashboard_service.get_spec(spec_id).model_dump(mode="json")
+        except DashboardNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/dashboards/specs/{spec_id}/save")
+    def save_dashboard_view(spec_id: str, body: SaveViewRequest) -> dict:
+        try:
+            view = dashboard_service.save_view(
+                spec_id, body.name, body.saved_by, body.saved_on or date.today()
+            )
+        except DashboardNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except DashboardValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return view.model_dump(mode="json")
+
+    @app.get("/dashboards/views")
+    def list_dashboard_views(name: str | None = Query(None)) -> dict:
+        found = dashboard_service.list_views(name)
+        return {"views": [v.model_dump(mode="json") for v in found]}
+
+    @app.post("/dashboards/specs/{spec_id}/assemble")
+    def assemble_dashboard(
+        spec_id: str, body: AssembleDashboardRequest | None = None
+    ) -> dict:
+        try:
+            assembly = dashboard_service.assemble(
+                spec_id,
+                (body.assembled_on if body else None) or date.today(),
+            )
+        except DashboardNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except DashboardVerificationError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"problems": exc.problems},
+            ) from exc
+        return assembly.model_dump(mode="json")
+
+    @app.get("/dashboards/assemblies/{assembly_id}")
+    def get_dashboard_assembly(assembly_id: str) -> dict:
+        try:
+            return dashboard_service.get_assembly(assembly_id).model_dump(
+                mode="json"
+            )
+        except DashboardNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/dashboards/assemblies/{assembly_id}/html")
+    def get_dashboard_html(assembly_id: str) -> HTMLResponse:
+        try:
+            assembly = dashboard_service.get_assembly(assembly_id)
+        except DashboardNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return HTMLResponse(content=assembly.html)
+
+    @app.get("/dashboards/assemblies/{assembly_id}/appendix")
+    def get_dashboard_appendix(assembly_id: str) -> dict:
+        try:
+            return dashboard_service.appendix(assembly_id)
+        except DashboardNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/dashboards/assemblies/{assembly_id}/verify")
+    def verify_dashboard(assembly_id: str) -> dict:
+        try:
+            problems = dashboard_service.verify_stored(assembly_id)
+        except DashboardNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"assembly_id": assembly_id, "problems": problems}
+
+    @app.get("/board")
+    def get_board(board_date: date | None = Query(None)) -> dict:
+        try:
+            view = dashboard_service.board_view(board_date)
+        except DashboardValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"board": view["board"], "sections": view["sections"]}
+
+    @app.get("/board/html")
+    def get_board_html(board_date: date | None = Query(None)) -> HTMLResponse:
+        try:
+            view = dashboard_service.board_view(board_date)
+        except DashboardValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return HTMLResponse(content=view["html"])
 
     return app
