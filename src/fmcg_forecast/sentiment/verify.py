@@ -9,13 +9,17 @@ Three checks, all trusting nothing stored:
   summing to the score, content address intact);
 - an *index* re-performs by recomputing it from the stored
   extractions it names;
-- a *sentiment claim in commentary* verifies only when it cites
-  items whose stored extractions support the direction the
-  sentence claims. A claim citing no items, citing another
-  commodity's items, citing unclassified items, or claiming a
-  direction the cited readings do not support is a problem — and
-  the forecast service refuses the whole commentary over it.
-  Mood without provenance never reaches the desk.
+- a *sentiment claim in commentary* — a sentiment sentence
+  carrying a direction word from the pack's claim vocabulary, or
+  citing items — verifies only when it cites items whose stored
+  extractions support the direction the sentence claims. A claim
+  citing no items, citing another commodity's items, citing
+  unclassified items, or claiming a direction the cited readings
+  do not support is a problem — and the forecast service refuses
+  the whole commentary over it. (A bare figure statement about
+  the index claims no direction and cites nothing; the figure
+  verifier disciplines its number.) Mood without provenance
+  never reaches the desk.
 """
 
 from __future__ import annotations
@@ -126,8 +130,9 @@ def verify_sentiment_claims(
 ) -> list[str]:
     """Check every sentiment claim in ``text`` against the record.
 
-    ``items`` / ``extractions`` are keyed by item id. A sentence
-    that mentions sentiment is a claim; claims are verified as
+    ``items`` / ``extractions`` are keyed by item id. A sentiment
+    claim is a sentence that mentions sentiment and carries a
+    direction word or an item citation; claims are verified as
     stated in the module docstring. Sentences that never mention
     sentiment are not this verifier's business (the figure
     verifier disciplines their numbers separately).
@@ -138,11 +143,6 @@ def verify_sentiment_claims(
             continue
         lowered = sentence.lower()
         cited = _ITEM_ID_RE.findall(sentence)
-        if not cited:
-            problems.append(
-                f"sentiment claim cites no items: {sentence.strip()!r}"
-            )
-            continue
         claimed: int | None = None
         if any(re.search(rf"\b{w}\b", lowered) for w in pack.claim_positive_words):
             claimed = 1
@@ -150,10 +150,23 @@ def verify_sentiment_claims(
             claimed = -1
         elif any(re.search(rf"\b{w}\b", lowered) for w in pack.claim_mixed_words):
             claimed = 0
+        if claimed is None and not cited:
+            # A bare figure statement ("Sentiment index (latest
+            # week): -0.5000.") claims no direction and cites
+            # nothing — the figure verifier disciplines its number;
+            # it is not a claim. A citation without a direction, or
+            # a direction without a citation, IS a claim and fails
+            # below.
+            continue
         if claimed is None:
             problems.append(
                 f"sentiment claim states no direction the pack recognises: "
                 f"{sentence.strip()!r}"
+            )
+            continue
+        if not cited:
+            problems.append(
+                f"sentiment claim cites no items: {sentence.strip()!r}"
             )
             continue
         weighted = 0.0

@@ -17,12 +17,18 @@ Every surface (API, CLI/demo) shares this service. Its rules:
   where the ledger stamps degraded, unmeasured (named, never
   blank) where the harness has not covered the series yet. The
   snapshot is part of the content address, and no read path offers
-  a view without it.
+  a view without it;
+- when a sentiment provider is wired (R4, Law 3), each run asks it
+  for the commodity's index input and hands it to the engine, and
+  commentary drafts pass a second gate: every sentiment claim in
+  the text must cite items whose stored extractions support it.
+  Unwired, both behaviours are exactly as before.
 """
 
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from datetime import date
 
 from fmcg_forecast.forecast.commentary import (
@@ -33,6 +39,7 @@ from fmcg_forecast.forecast.commentary import (
 from fmcg_forecast.forecast.engine import (
     EventAdjustment,
     ForecastError,
+    SentimentInput,
     forecast_content_id,
     run_engine,
 )
@@ -84,9 +91,17 @@ def _require_named(value: str, field: str) -> str:
 
 
 class ForecastService:
-    def __init__(self, store, model: ModelPort):
+    def __init__(
+        self,
+        store,
+        model: ModelPort,
+        sentiment_provider: Callable[[str, date], SentimentInput | None] | None = None,
+        sentiment_claim_verifier: Callable[[str, Forecast], list[str]] | None = None,
+    ):
         self.store = store
         self.model = model
+        self.sentiment_provider = sentiment_provider
+        self.sentiment_claim_verifier = sentiment_claim_verifier
 
     # -- runs ---------------------------------------------------------
     def run_forecast(
@@ -101,14 +116,21 @@ class ForecastService:
         manifest = self.store.get_manifest()
         if manifest is None:
             raise ForecastError("dataset not loaded; run the ingest workflow first")
+        effective_as_of = as_of or manifest.history_end
+        sentiment_input = (
+            self.sentiment_provider(commodity, effective_as_of)
+            if self.sentiment_provider is not None
+            else None
+        )
         forecast = run_engine(
             self.store,
             manifest,
             commodity,
             market,
-            as_of or manifest.history_end,
+            effective_as_of,
             via_backtest=via_backtest,
             event_adjustments=event_adjustments,
+            sentiment_input=sentiment_input,
         )
         forecast = self._attach_accuracy(forecast)
         existing = self.store.get_forecast(forecast.forecast_id)
@@ -197,6 +219,36 @@ class ForecastService:
         forecast.forecast_id = forecast_content_id(forecast)
         return forecast
 
+    def sentiment_view(self, forecast_id: str) -> dict:
+        """The forecast's sentiment line, as its own read (R4).
+
+        ``state`` is absent when the run carried no sentiment
+        input at all, ``not_estimable`` when the corpus was too
+        thin (the line names the failing floors), and
+        ``estimated`` when the driver was estimated like any other.
+        """
+        forecast = self.get_forecast(forecast_id)
+        line = next(
+            (line for line in forecast.lines if line.driver == "sentiment"), None
+        )
+        if line is None:
+            return {
+                "forecast_id": forecast.forecast_id,
+                "commodity": forecast.commodity,
+                "market": forecast.market,
+                "state": "absent",
+                "note": "this run carried no sentiment input — the "
+                "corpus was not loaded, or the provider was not wired",
+                "line": None,
+            }
+        return {
+            "forecast_id": forecast.forecast_id,
+            "commodity": forecast.commodity,
+            "market": forecast.market,
+            "state": line.input_summary.get("state", "estimated"),
+            "line": line.model_dump(mode="json"),
+        }
+
     def accuracy_view(self, forecast_id: str) -> dict:
         """The forecast's pinned accuracy snapshot, as its own read."""
         forecast = self.get_forecast(forecast_id)
@@ -282,6 +334,8 @@ class ForecastService:
         subject = commentary_subject(forecast)
         text = self.model.draft_commentary(subject=subject, figures=figures)
         problems = verify_commentary(text, forecast)
+        if self.sentiment_claim_verifier is not None:
+            problems = problems + self.sentiment_claim_verifier(text, forecast)
         if problems:
             raise CommentaryVerificationError(problems)
         commentary = Commentary(

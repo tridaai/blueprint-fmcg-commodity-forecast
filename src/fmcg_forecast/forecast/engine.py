@@ -42,6 +42,20 @@ Events: the engine accepts declared event adjustments as an input
 slot (a per-day log-price path per event). Round 2 ships the slot
 empty; the event registry fills it in R5, where an event's
 contribution will appear as its own line instead of being absorbed.
+
+Sentiment (R4, Law 3): the engine accepts a sentiment input — the
+weekly index carried daily, supplied by the sentiment service —
+and treats it as one more driver: standardised alignment on the
+common observed days, its coefficient estimated by the same
+residual regression, its future path the last index value decayed
+at its measured persistence. But the line is earned, not assumed:
+the pack's estimation floors ride on the input, and when the
+index history is too thin, too short-spanned or too stale, the
+engine records a ``not_estimable`` sentiment line with zero
+contribution and the failing floor named — following the same
+honesty pattern as coffee's named data gaps. When no sentiment
+input is supplied at all, the engine behaves exactly as it did
+before R4.
 """
 
 from __future__ import annotations
@@ -90,6 +104,7 @@ _TRANSFORMS = {
     "stock_level": "z of stock level",
     "trade_flow": "z of (import flow - export flow)",
     "weather_index": "raw weather index (-1..1)",
+    "sentiment": "weekly sentiment index carried daily (raw, -1..1)",
 }
 
 
@@ -120,6 +135,31 @@ class EventAdjustment(BaseModel):
 
     event_id: str
     path: list[float] = Field(description="Log-price adjustment per horizon day")
+
+
+class SentimentInput(BaseModel):
+    """The sentiment service's hand-off to the engine (R4, Law 3).
+
+    ``daily`` is the weekly index carried to each day of its week
+    (ISO date -> value), restricted to fully-ended weeks. The
+    estimation floors and the pack version ride along from the
+    sentiment pack, so the engine judges estimability against the
+    pack's stated bars and records them on the line it produces.
+    ``cited_item_ids`` are the strongest items behind the latest
+    index whose readings agree with its sign — the only items
+    commentary may cite for the latest reading.
+    """
+
+    daily: dict[str, float] = Field(
+        description="ISO date -> sentiment index value for that day"
+    )
+    cited_item_ids: list[str] = Field(default_factory=list)
+    latest_index_value: float | None = None
+    latest_week_start: date | None = None
+    pack_version: str = ""
+    min_aligned_days: int = Field(description="Estimation floor from the sentiment pack")
+    min_span_days: int
+    recency_days: int
 
 
 class SeriesSource(Protocol):
@@ -155,8 +195,16 @@ def _driver_inputs(
     market: str,
     as_of: date,
     price_dates: list[date],
+    sentiment_daily: dict[date, float] | None = None,
 ) -> tuple[dict[str, np.ndarray], list[date]]:
-    """Standardised driver regressors aligned to common observed days."""
+    """Standardised driver regressors aligned to common observed days.
+
+    Sentiment is a pseudo-driver: its raw series is the index the
+    sentiment service computed (per commodity, carried daily), not
+    an observation, so it arrives as an argument rather than
+    through the store port. It aligns by the same common-days rule
+    and enters raw, like the weather index.
+    """
     spec = BY_NAME[commodity]
     raw: dict[str, dict[date, float]] = {}
 
@@ -173,6 +221,9 @@ def _driver_inputs(
         wanted["trade_flow"] = ["import_flow", "export_flow"]
     if "weather_index" in spec.drivers:
         wanted["weather_index"] = ["weather_index"]
+    if sentiment_daily is not None:
+        wanted["sentiment"] = ["sentiment"]
+        raw["sentiment"] = dict(sentiment_daily)
 
     common = set(price_dates)
     for source_drivers in wanted.values():
@@ -197,6 +248,8 @@ def _driver_inputs(
             inputs[line] = _z(values)
         elif line == "weather_index":
             inputs[line] = np.array([raw["weather_index"][d] for d in days])
+        elif line == "sentiment":
+            inputs[line] = np.array([raw["sentiment"][d] for d in days])
     return inputs, days
 
 
@@ -209,6 +262,7 @@ def run_engine(
     *,
     via_backtest: bool = False,
     event_adjustments: list[EventAdjustment] | tuple[EventAdjustment, ...] = (),
+    sentiment_input: SentimentInput | None = None,
 ) -> Forecast:
     """Run the stated method and return the forecast artefact (draft)."""
     if as_of >= manifest.future_start and not via_backtest:
@@ -238,6 +292,49 @@ def run_engine(
     y = np.log(np.array([float(r.value) for r in price_rows]))
     anchor = days_obs[0]
 
+    # --- sentiment estimability (R4): the line is earned ----------
+    # The pack's floors ride on the input: enough index-covered
+    # price days, spanning enough calendar time, with the newest
+    # covered day inside the recency window. Failing any floor
+    # records a not-estimable line (zero contribution, reason
+    # named) instead of estimating on a corpus too thin to carry
+    # the driver — the coffee pattern, applied to sentiment.
+    sentiment_daily: dict[date, float] | None = None
+    sentiment_not_estimable: str | None = None
+    sentiment_counts = {"aligned_days": 0, "span_days": 0}
+    if sentiment_input is not None:
+        parsed = {
+            date.fromisoformat(k): float(v)
+            for k, v in sentiment_input.daily.items()
+        }
+        covered = [d for d in days_obs if d in parsed]
+        aligned = len(covered)
+        span = (covered[-1] - covered[0]).days + 1 if covered else 0
+        newest_age = (as_of - covered[-1]).days if covered else None
+        sentiment_counts = {"aligned_days": aligned, "span_days": span}
+        failures: list[str] = []
+        if aligned < sentiment_input.min_aligned_days:
+            failures.append(
+                f"only {aligned} index-covered price days (the pack's "
+                f"floor is {sentiment_input.min_aligned_days})"
+            )
+        if span < sentiment_input.min_span_days:
+            failures.append(
+                f"the covered days span {span} calendar days (the "
+                f"pack's floor is {sentiment_input.min_span_days})"
+            )
+        if newest_age is None:
+            failures.append("no index-covered price day at all")
+        elif newest_age > sentiment_input.recency_days:
+            failures.append(
+                f"the newest index-covered day is {newest_age} days "
+                f"before as_of (the pack allows {sentiment_input.recency_days})"
+            )
+        if failures:
+            sentiment_not_estimable = "; ".join(failures)
+        else:
+            sentiment_daily = parsed
+
     def baseline_design(dates: list[date]) -> np.ndarray:
         years = np.array([(d - anchor).days / 365.25 for d in dates])
         angle = np.array(
@@ -251,7 +348,9 @@ def run_engine(
     base_coef, *_ = np.linalg.lstsq(design, y, rcond=None)
     resid1 = y - design @ base_coef
 
-    inputs, reg_days = _driver_inputs(source, commodity, market, as_of, days_obs)
+    inputs, reg_days = _driver_inputs(
+        source, commodity, market, as_of, days_obs, sentiment_daily
+    )
     reg_index = {d: i for i, d in enumerate(days_obs)}
     reg_rows = [reg_index[d] for d in reg_days]
     line_names = [name for name in ATTRIBUTION_ORDER if name in inputs]
@@ -340,6 +439,19 @@ def run_engine(
             )
         )
 
+    if sentiment_not_estimable is not None:
+        # The line exists on every day at exactly zero, in
+        # attribution order — present, named, and contributing
+        # nothing, so the decomposition identity is untouched.
+        for day in days:
+            ordered: dict[str, float] = {}
+            for name in ATTRIBUTION_ORDER:
+                if name == "sentiment":
+                    ordered["sentiment"] = 0.0
+                elif name in day.contributions:
+                    ordered[name] = day.contributions[name]
+            day.contributions = ordered
+
     def at_horizon(path: list[float]) -> dict[str, float]:
         return {str(h): path[h - 1] for h in HORIZONS}
 
@@ -361,6 +473,43 @@ def run_engine(
                 },
             )
         )
+    if sentiment_not_estimable is not None and sentiment_input is not None:
+        lines.append(
+            ContributionLine(
+                driver="sentiment",
+                coefficient=None,
+                input_path=[0.0] * FORECAST_DAYS,
+                contribution_path_inr=[0.0] * FORECAST_DAYS,
+                at_horizon={str(h): 0.0 for h in HORIZONS},
+                input_summary={
+                    "state": "not_estimable",
+                    "reason": sentiment_not_estimable,
+                    "transform": _TRANSFORMS["sentiment"],
+                    "pack_version": sentiment_input.pack_version,
+                    "aligned_days": sentiment_counts["aligned_days"],
+                    "span_days": sentiment_counts["span_days"],
+                    "min_aligned_days": sentiment_input.min_aligned_days,
+                    "min_span_days": sentiment_input.min_span_days,
+                    "recency_days": sentiment_input.recency_days,
+                },
+            )
+        )
+    if sentiment_daily is not None and sentiment_input is not None:
+        for line in lines:
+            if line.driver == "sentiment":
+                line.input_summary.update(
+                    {
+                        "state": "estimated",
+                        "pack_version": sentiment_input.pack_version,
+                        "latest_index_value": sentiment_input.latest_index_value,
+                        "latest_week_start": (
+                            sentiment_input.latest_week_start.isoformat()
+                            if sentiment_input.latest_week_start
+                            else None
+                        ),
+                        "cited_item_ids": list(sentiment_input.cited_item_ids),
+                    }
+                )
     lines.append(
         ContributionLine(
             driver="events",

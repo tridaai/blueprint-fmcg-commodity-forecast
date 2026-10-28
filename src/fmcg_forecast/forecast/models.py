@@ -35,6 +35,7 @@ ATTRIBUTION_ORDER: tuple[str, ...] = (
     "stock_level",
     "trade_flow",
     "weather_index",
+    "sentiment",
     "events",
 )
 
@@ -45,7 +46,7 @@ FORECAST_DAYS = 90
 class ContributionLine(BaseModel):
     """One driver's contribution, as a recorded line (Law 1)."""
 
-    driver: str = Field(description="arrivals | stock_level | trade_flow | weather_index | events")
+    driver: str = Field(description="arrivals | stock_level | trade_flow | weather_index | sentiment | events")
     coefficient: float | None = Field(
         description="Estimated log-price effect per unit of the standardised "
         "input (None for the events slot, whose input is a declared path)"

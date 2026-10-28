@@ -33,6 +33,10 @@ def allowed_figures(forecast: Forecast) -> set[float]:
         values.update(day.contributions.values())
     for line in forecast.lines:
         values.update(line.at_horizon.values())
+        if line.driver == "sentiment":
+            latest = line.input_summary.get("latest_index_value")
+            if isinstance(latest, (int, float)):
+                values.add(float(latest))
     values.add(forecast.method.sparsity.multiplier)
     if forecast.accuracy is not None:
         for slice_ in forecast.accuracy.per_horizon:
@@ -80,6 +84,27 @@ def commentary_figures(forecast: Forecast) -> dict[str, str]:
             f"{by_horizon[30].contributions[name]:.2f}"
         )
     figures["Sparsity widening factor"] = f"{forecast.method.sparsity.multiplier:.4f}"
+    sentiment = next(
+        (line for line in forecast.lines if line.driver == "sentiment"), None
+    )
+    if sentiment is not None and sentiment.input_summary.get("state") == "estimated":
+        latest = sentiment.input_summary.get("latest_index_value")
+        cited = sentiment.input_summary.get("cited_item_ids") or []
+        if isinstance(latest, (int, float)):
+            figures["Sentiment index (latest week)"] = f"{latest:.4f}"
+            # A sentiment reading is handed to the model only with
+            # its provenance attached: the direction word and the
+            # items behind it travel together, and the claim
+            # verifier checks the pairing against the stored
+            # extractions before the draft may be stored.
+            if cited and latest >= 0.05:
+                figures["Sentiment reading (direction per cited items)"] = (
+                    f"supportive — items {', '.join(cited)}"
+                )
+            elif cited and latest <= -0.05:
+                figures["Sentiment reading (direction per cited items)"] = (
+                    f"headwind — items {', '.join(cited)}"
+                )
     if forecast.accuracy is not None:
         figures["Backtest accuracy state"] = forecast.accuracy.state
         for slice_ in forecast.accuracy.per_horizon:
