@@ -240,6 +240,74 @@ and a frozen `constraints.txt` · multi-stage non-root Docker.
   the extraction against the intent and walks the estimated and
   not-estimable lines; the HTTP harness checks the whole surface.
 
+## What Round 5 adds
+
+- **The governed event registry** — shocks exist only as
+  declarations (migration 0005): a named analyst act records each
+  event's class from the **event pack** (tariff change, export
+  restriction, import policy, weather shock, logistics disruption,
+  demand shock), its commodity scope, its effective window (open
+  while still in force), and its **stated transmission** — which
+  driver it moves, the estimated peak log-price effect, and the
+  named basis it rests on (an announced measure, a measured
+  analogue, or a desk estimate, stated concretely). Placeholder
+  declarers, channels outside the class, zero peaks and inverted
+  windows are refused. Declarations are content-addressed and
+  insert-only; a correction is a new declaration, never an edit.
+  The system never "detects" an event from a price move — the
+  registry is declared, the measurement layer only checks it.
+- **Historical events, checked against measurement** — the
+  dataset's planted shocks are seeded from the manifest as
+  historical entries (the 2025 oilseed tariff at +0.16 log through
+  the import channel, the 2024 basmati export ban at −0.11 through
+  the export channel, the 2025 chili drought at +0.036 through the
+  weather channel), and every entry's claimed transmission is
+  **verified against history** by the pack's stated measurement:
+  the seasonally-matched year-over-year ratio of ratios per
+  market, medianed across the commodity's markets, judged inside
+  the pack's [0.5, 1.5] band. All three planted claims verify
+  (measured ×1.110, ×0.918, ×1.045). A claim that disagrees — a
+  forged +0.60 over the real tariff window, a wrong-sign claim —
+  is flagged **`transmission_unverified` on the event's face**,
+  in every read. An event whose window cannot be measured yet
+  reads `not_measurable`, named, never estimated.
+- **Shocked forecasts show separate lines** — the engine's events
+  slot is filled by the registry: the pack's stated path rule
+  (3-day ramp to the peak inside the window, linear decay over
+  the event's stated decay days after it closes) becomes a per-day
+  log path, and each event telescopes into the decomposition as
+  **its own named line** — the events line records every event's
+  log path and INR contribution path, the verifier checks the
+  per-event paths compose the day adjustments, and the
+  decomposition identity (baseline + lines = P50) holds exactly.
+  Outside an event's window and decay tail there is no line: a
+  hand-computed fixture (wheat, +0.10 over ten January days,
+  decay 10) grades the path day by day — ramp thirds, peak,
+  decay tenths — in the tests and the eval gate.
+- **Honestly wider bands on shocked days** — on any day an event's
+  adjustment is non-zero, the forecast's interval growth factor is
+  multiplied by the pack's stated widening factor (×1.25), and
+  only on those days: graded exactly, by comparing a shocked
+  run's log band width against the plain run's, day by day.
+- **The what-happened view** — per event and market, the measured
+  price path against a no-event baseline (the engine's baseline
+  method fitted on pre-window history only, projected through the
+  window and its decay tail): the tariff's review at Indore shows
+  78 observed days, mean effect ×1.078, peak exactly the planted
+  step. A window that has not begun, or has too little history
+  before it, reads not measurable with the reason named.
+- **Surfaces** — migration 0005 (both dialects); `POST
+  /market-events` (the analyst act), `POST
+  /market-events/seed-historical`, `GET /market-events` (+
+  `/{id}`, each read carrying its transmission verdict), `GET
+  /market-events/{id}/verify`, `GET
+  /market-events/{id}/impact`, `GET /market-events/verify`
+  (registry re-performance), `GET /forecasts/{id}/events`; serve
+  seeds the planted shocks at boot; forecasts run through the API
+  carry the registry wired in; the demo seeds, verifies, reviews
+  and then declares a new February tariff and re-forecasts with
+  and without it; the HTTP harness checks the whole surface.
+
 ## Honest status
 
 - **Built and gated in R1:** the spine, generator + manifest, store port +
@@ -279,8 +347,23 @@ and a frozen `constraints.txt` · multi-stage non-root Docker.
   zero-tolerance counters for extraction-vs-intent, index
   re-performance, per-commodity contribution state as planted, accepted
   claim violations and intent isolation.
-- **Not yet built:** event/scenario handling
-  (R5-R6), prompt-to-dashboard (R7), the console (R13). The round map runs
+- **Built and gated in R5:** the event pack (classes, channels,
+  bases, path rule, measurement rule, widening factor as versioned
+  data), the governed registry (content-addressed declarations,
+  insert-only, named-analyst act with refusals), historical seeding
+  from the manifest with every planted transmission verified
+  against the seasonally-matched measurement (forged and
+  wrong-sign claims flagged unverified on the event's face; future
+  events named not measurable), per-event forecast lines with the
+  decomposition identity intact, interval widening exactly per
+  pack on shocked days only, the baseline-projection impact view,
+  migration 0005, registry API surfaces, demo + harness walks.
+  Eval gate v5 adds zero-tolerance counters for the registry
+  mapping, transmission verification, the hand-computed fixture
+  line, widening, registration refusals and the impact view; the
+  truth-isolation scan now covers the events package too.
+- **Not yet built:** scenario forks
+  (R6), prompt-to-dashboard (R7), the console (R13). The round map runs
   to R20 and continues past it until the production bar is met.
 - **The dataset in this repo is generated in-repo for the blueprint** — gold
   by construction, so the engine can be graded against a known future.
@@ -339,7 +422,14 @@ src/fmcg_forecast/
     corpus.py      the planted corpus (load/grading side only)
     grading.py     the intent store (grading side only)
     load.py        corpus load (idempotent, digest-checked)
-migrations/        0001-0004 SQL, sqlite + postgres dialects
+  events/          the event registry package (truth-isolated, R5):
+    pack.py        the event pack: classes, channels, bases, rules
+    models.py      market event / verification / impact artefacts
+    paths.py       the pack's path rule, performed
+    measure.py     transmission measurement + the impact view
+    verify.py      re-performance of stored declarations
+    service.py     declare / seed / verify / forecast provider
+migrations/        0001-0005 SQL, sqlite + postgres dialects
 scripts/           demo.py, local_harness.py
 evals/             the eval gate
 docs/              architecture.md
