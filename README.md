@@ -92,6 +92,44 @@ and a frozen `constraints.txt` · multi-stage non-root Docker.
   `/catalogue`, `/health`, `/readiness`, with structured JSON logs and a
   request id on every response.
 
+## What Round 2 adds
+
+- **The forecast engine v1** — for any (commodity × market) series, a 90-day
+  daily forecast by a stated method, recorded in full on the artefact:
+  a trend + day-of-year-seasonality **baseline** (OLS on log price), plus
+  **per-driver contributions** — arrivals pressure, stock cover, trade flow,
+  weather — each estimated by a stated regression on history and projected
+  forward as its last observed pressure decaying at its measured
+  persistence. Contributions are attributed sequentially in a stated order,
+  so **baseline + contributions + events equals the forecast total exactly,
+  to the paisa**, and a re-performance verifier re-adds every day and
+  recomputes the artefact's content address: a tampered line or total fails.
+- **Honest intervals** — P10/P90 from rolling residual quantiles, propagated
+  by the residuals' own persistence and widened by a measured **sparsity
+  multiplier** (√(calendar days ÷ observed days)). Coffee's multiplier is
+  1.89 against wheat's 1.08, its missing drivers (stock, imports, exports)
+  are named on the artefact, and its realised band is wider — thin data
+  gets wide bands and named gaps, never borrowed precision (Law 7).
+- **Sealed-window discipline** — the engine estimates on history only. An
+  `as_of` inside the sealed grading window is refused unless the caller
+  explicitly invokes the backtest path (the harness lands in R3); the
+  engine structurally cannot read the sealed rows.
+- **The events slot** — forecasts carry a declared-event adjustment line,
+  zero in R2; the event registry fills it in R5 so a shock shows as its
+  own contribution instead of being absorbed silently (Law 4).
+- **Draft → official is a human act** — a forecast is born a draft; making
+  it the desk's official view takes a recorded approval by a named
+  approver with a named role (placeholders refused, a second approval
+  refused). Runs are idempotent: the artefact is content-addressed.
+- **Figure-verified commentary** — the model port drafts commentary over
+  the artefact; every decimal figure in the draft must appear in the
+  artefact or the draft is refused wholesale and nothing is stored.
+- **Surfaces** — migration 0002 (forecasts, approvals, commentaries);
+  `POST /forecasts/run`, `GET /forecasts/{id}` (+ `/contributions`,
+  `/verify`, `/approval`, `/commentary`), `POST /forecasts/{id}/approve`;
+  the demo walks a wheat forecast from run to official view, and coffee's
+  honest band.
+
 ## Honest status
 
 - **Built and gated in R1:** the spine, generator + manifest, store port +
@@ -99,9 +137,18 @@ and a frozen `constraints.txt` · multi-stage non-root Docker.
   API reads, demo, harness, eval gate v1 (data integrity: planted shock/ban
   bands, seasonality, coverage completeness, coffee sparsity, truth
   isolation, manifest agreement — all zero-tolerance).
-- **Not yet built:** the forecast engine itself (R2), backtesting + the
-  accuracy ledger (R3), the sentiment pack (R4), event/scenario handling
-  (R5-R6), prompt-to-dashboard (R7), the console (R13). The round map runs
+- **Built and gated in R2:** the forecast engine (stated decomposition,
+  contribution lines, sparsity-honest intervals, sealed-window refusal,
+  events slot), migration 0002, the re-performance verifier, the approval
+  gate, figure-verified commentary, forecast API surfaces, demo + harness
+  walks. Eval gate v2 adds zero-tolerance counters for decomposition sums,
+  contribution signs on the planted harvest window, coffee gaps/widening,
+  tamper detection, sealed-window acceptances, commentary figure
+  violations and the events slot.
+- **Not yet built:** backtesting + the accuracy ledger (R3 — until it
+  lands, forecasts do not yet carry their measured accuracy, Law 2),
+  the sentiment pack (R4), event/scenario handling (R5-R6),
+  prompt-to-dashboard (R7), the console (R13). The round map runs
   to R20 and continues past it until the production bar is met.
 - **The dataset in this repo is generated in-repo for the blueprint** — gold
   by construction, so the engine can be graded against a known future.
@@ -137,9 +184,14 @@ src/fmcg_forecast/
   migrations.py    numbered migration runner (both dialects)
   workflow.py      LangGraph ingest graph: generate -> persist -> verify
   modelport.py     offline default; anthropic/bedrock/nim fail-closed
-  api.py           FastAPI read surfaces
-  forecast/        the forecast engine package (lands R2, truth-isolated)
-migrations/        0001 SQL, sqlite + postgres dialects
+  api.py           FastAPI surfaces (reads + the forecast surface)
+  forecast/        the forecast engine package (truth-isolated):
+    models.py      forecast / approval / commentary artefacts
+    engine.py      the stated decomposition engine
+    verify.py      re-performance verification of stored artefacts
+    commentary.py  figure extraction + verification for drafts
+    service.py     run / approve / explain — the one workflow
+migrations/        0001-0002 SQL, sqlite + postgres dialects
 scripts/           demo.py, local_harness.py
 evals/             the eval gate
 docs/              architecture.md

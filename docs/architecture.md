@@ -27,8 +27,12 @@
 | Migrations | `migrations.py`, `migrations/{sqlite,postgres}/` | Numbered SQL files + a ledger table; idempotent runner shared by both stores. |
 | Ingest workflow | `workflow.py` | LangGraph graph: `generate → persist → verify`. Idempotent at the workflow level (same seed + digest verifies and stops); the store stays insert-only underneath. |
 | Model port | `modelport.py` | Language only (Law 1). Offline deterministic default; hosted profiles refuse loudly until configured. |
-| API | `api.py` | Read surfaces: `/series`, `/events`, `/manifest`, `/coverage/{commodity}`, `/catalogue`, `/health`, `/readiness`. JSON logs + request id on every response. |
-| Forecast package | `forecast/` | The engine lands in R2. Its `__init__` states the isolation law it is graded on. |
+| API | `api.py` | Read surfaces: `/series`, `/events`, `/manifest`, `/coverage/{commodity}`, `/catalogue`, `/health`, `/readiness`; forecast surface (R2): `/forecasts/run`, `/forecasts/{id}` + `/contributions`, `/verify`, `/approve`, `/approval`, `/commentary`. JSON logs + request id on every response. |
+| Forecast package | `forecast/` | The engine (R2). Its `__init__` states the isolation law it is graded on: the package reads observations through the store port only, never the truth store. |
+| Forecast engine | `forecast/engine.py` | The stated method: OLS baseline (trend + day-of-year seasonality on log price); baseline residuals regressed on standardised driver inputs (arrivals = z(log arrivals), stock = z(level), trade = z(imports − exports), weather = raw); driver paths projected as last input × persistence^h; sequential (telescoping) attribution in the order arrivals → stock → trade → weather → events, so the decomposition sums to the total to the paisa; intervals from rolling 365-observation residual quantiles, AR-propagated and widened by the sparsity multiplier √(calendar/observed days). Refuses an `as_of` inside the sealed window unless invoked via the backtest path; refuses thin history (< 250 observations or < 730 days span) by naming it. |
+| Forecast verifier | `forecast/verify.py` | Re-performs a stored artefact: re-adds every day, checks line paths against day values, horizon summaries against day rows, interval ordering, and the content address. Any tamper fails here. |
+| Commentary | `forecast/commentary.py` | Builds the figure set from the artefact and verifies model drafts against it: every decimal figure in a draft must be an artefact figure, or the draft is refused wholesale. |
+| Forecast service | `forecast/service.py` | The one workflow every surface shares: idempotent runs (content-addressed artefacts), the draft → official approval act (named approver + role; placeholders and repeat approvals refused), figure-verified commentary drafting. |
 
 ## Data design
 
@@ -53,8 +57,8 @@
 LangGraph state machine whose transitions are stored artefacts:
 
 - **compute** (R2–R3): the stated forecast engine — trend/seasonal
-  baseline + per-driver contributions — plus rolling-origin backtests
-  and the accuracy ledger (Law 2).
+  baseline + per-driver contributions — landed in R2; rolling-origin
+  backtests and the accuracy ledger land in R3 (Law 2).
 - **explain** (R4): sentiment as a scored pack with provenance;
   commentary drafted by the model port around computed figures only.
 - **scenario** (R5–R6): declared events and bounded lever forks,
