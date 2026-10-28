@@ -137,6 +137,28 @@ Round 6 counters (scenario studio, Law 5), also zero-tolerance:
   state error, a supersession link wrong, or the base forecast
   artefact differing by a byte after all scenario activity.
 
+Round 7 counters (prompt-to-dashboard, Law 6), also zero-tolerance:
+
+- dashboard_lineage_errors: a rendered figure on an assembled
+  dashboard whose lineage walk is empty, never terminates at a
+  stored fact, or does not pass through its own artefact — or
+  a stored assembly the verifier flags.
+- dashboard_gap_suppression_errors: a clause the catalogue
+  cannot state that does not become a named gap panel on the
+  spec and a rendered gap on the page, an unrun series rendered
+  as anything but a gap, or a scenario panel appearing when
+  the prompt named no scenario.
+- dashboard_rerun_diff_errors: an identical re-assembly that
+  mints a new artefact, a gap->rendered flip after the missing
+  forecast lands that the re-run diff misses, or an events
+  binding change the diff misses.
+- dashboard_board_errors: the morning board missing the
+  degraded chili/Guntur row, coffee's named-gap row, or the
+  active February tariff row; a row whose artefact does not
+  resolve in the store; a clean series (wheat/Delhi) appearing
+  among the degraded or data-gap rows; or a board rebuild that
+  is not the same artefact.
+
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
 
@@ -170,6 +192,7 @@ def truth_isolation_violations() -> int:
         + list((base / "backtest").rglob("*.py"))
         + list((base / "events").rglob("*.py"))
         + list((base / "scenarios").rglob("*.py"))
+        + list((base / "dashboards").rglob("*.py"))
     )
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -237,6 +260,10 @@ def main() -> int:
         "scenario_diff_errors": 0,
         "scenario_event_errors": 0,
         "scenario_adoption_errors": 0,
+        "dashboard_lineage_errors": 0,
+        "dashboard_gap_suppression_errors": 0,
+        "dashboard_rerun_diff_errors": 0,
+        "dashboard_board_errors": 0,
     }
 
     # --- planted events, measured seasonally-matched ---------------
@@ -1266,7 +1293,155 @@ def main() -> int:
     if scenario_forecast_service.get_forecast(scenario_base.forecast_id).status != "draft":
         counters["scenario_adoption_errors"] += 1
 
-    print("Round 6 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio)")
+    # --- prompt-to-dashboard (R7, Law 6) ----------------------------
+    from fmcg_forecast.dashboards.pack import TERMINAL_FACT_KINDS
+    from fmcg_forecast.dashboards.service import DashboardService
+
+    dashboard_service = DashboardService(
+        store, _OfflineModel(), event_service, sentiment
+    )
+
+    # Lineage: assemble a mixed dashboard; every rendered figure
+    # must walk to a stored fact through its own artefact, and
+    # the stored assembly must verify clean.
+    dash_spec = dashboard_service.ask(
+        "wheat forecast at delhi and soybean sentiment and "
+        "declared events for soybean and the adopted scenario "
+        "for soybean at indore",
+        "eval.desk",
+        _date(2026, 1, 7),
+    )
+    dash_assembly = dashboard_service.assemble(dash_spec.spec_id, _date(2026, 1, 7))
+    if dashboard_service.verify_stored(dash_assembly.assembly_id):
+        counters["dashboard_lineage_errors"] += 1
+    rendered_figures = 0
+    for dash_panel in dash_assembly.panels:
+        if dash_panel.state != "rendered":
+            continue
+        for dash_figure in dash_panel.figures:
+            rendered_figures += 1
+            walk = dash_figure.lineage
+            if (
+                not walk
+                or dash_figure.artefact_id not in {f.ref for f in walk}
+                or not any(f.kind in TERMINAL_FACT_KINDS for f in walk)
+            ):
+                counters["dashboard_lineage_errors"] += 1
+    if rendered_figures == 0:
+        counters["dashboard_lineage_errors"] += 1
+    # Hypothetical discipline + the adopted scenario renders as adopted.
+    adopted_figures = {
+        f.key: f.value
+        for p in dash_assembly.panels
+        for f in p.figures
+        if f.key == "view_kind"
+    }
+    if adopted_figures.get("view_kind") != "adopted_scenario":
+        counters["dashboard_lineage_errors"] += 1
+    plain_spec = dashboard_service.ask(
+        "soybean forecast at indore", "eval.desk", _date(2026, 1, 7)
+    )
+    if any(p.kind == "scenario_diff" for p in plain_spec.panels):
+        counters["dashboard_gap_suppression_errors"] += 1
+
+    # Gap suppression: unstateable clauses stay named gaps from
+    # spec to rendered page; an unrun series is a gap, never a
+    # number.
+    gap_spec = dashboard_service.ask(
+        "coffee stock position and wheat rainfall and tea prices",
+        "eval.desk",
+        _date(2026, 1, 7),
+    )
+    if sum(1 for p in gap_spec.panels if p.kind == "gap") != 3:
+        counters["dashboard_gap_suppression_errors"] += 1
+    gap_assembly = dashboard_service.assemble(gap_spec.spec_id, _date(2026, 1, 7))
+    if any(p.state != "gap" for p in gap_assembly.panels):
+        counters["dashboard_gap_suppression_errors"] += 1
+    for gap_panel in gap_assembly.panels:
+        if gap_panel.gap_needed not in gap_assembly.html:
+            counters["dashboard_gap_suppression_errors"] += 1
+
+    # Re-run diffs: identical re-assembly is the same artefact;
+    # a gap that fills in flips on the diff; a new declaration
+    # moves the events binding on the diff.
+    again = dashboard_service.assemble(dash_spec.spec_id, _date(2026, 1, 8))
+    if again.assembly_id != dash_assembly.assembly_id:
+        counters["dashboard_rerun_diff_errors"] += 1
+    cumin_spec = dashboard_service.ask(
+        "cumin forecast at jodhpur", "eval.desk", _date(2026, 1, 7)
+    )
+    cumin_first = dashboard_service.assemble(cumin_spec.spec_id, _date(2026, 1, 7))
+    if cumin_first.panels[0].state != "gap":
+        counters["dashboard_rerun_diff_errors"] += 1
+    scenario_forecast_service.run_forecast("cumin", "jodhpur")
+    cumin_second = dashboard_service.assemble(cumin_spec.spec_id, _date(2026, 1, 8))
+    if not any(
+        d.kind == "panel_state_changed" and d.before == "gap" and d.after == "rendered"
+        for d in cumin_second.diff
+    ):
+        counters["dashboard_rerun_diff_errors"] += 1
+    events_spec = dashboard_service.ask(
+        "declared events for groundnut", "eval.desk", _date(2026, 1, 7)
+    )
+    dashboard_service.assemble(events_spec.spec_id, _date(2026, 1, 7))
+    new_groundnut_event = event_service.register_event(
+        event_class="export_restriction",
+        commodity="groundnut",
+        window_start=_date(2026, 3, 1),
+        window_end=_date(2026, 3, 31),
+        channel="export_flow",
+        peak_log_price_effect=0.05,
+        basis="announced_measure",
+        basis_detail="Export of groundnut oil restricted by a DGFT notification",
+        decay_days=15,
+        description="Groundnut export restriction for March",
+        declared_by="eval.desk",
+        declared_on=_date(2026, 1, 8),
+    )
+    events_second = dashboard_service.assemble(events_spec.spec_id, _date(2026, 1, 9))
+    if not any(
+        d.kind == "binding_superseded"
+        and new_groundnut_event.event_id in (d.after or [])
+        for d in events_second.diff
+    ):
+        counters["dashboard_rerun_diff_errors"] += 1
+
+    # The morning board: exceptions backed by artefacts.
+    board = dashboard_service.board(_date(2026, 2, 15))
+    board_kinds: dict[str, list] = {}
+    for board_row in board.rows:
+        board_kinds.setdefault(board_row.kind, []).append(board_row)
+    if not any(
+        r.commodity == "chili" and r.market == "guntur"
+        for r in board_kinds.get("degraded", [])
+    ):
+        counters["dashboard_board_errors"] += 1
+    if not any(
+        r.commodity == "coffee" and "stock_level" in r.headline
+        for r in board_kinds.get("data_gap", [])
+    ):
+        counters["dashboard_board_errors"] += 1
+    if not any(
+        r.artefact_id == eval_tariff.event_id
+        for r in board_kinds.get("active_event", [])
+    ):
+        counters["dashboard_board_errors"] += 1
+    if any(
+        r.commodity == "wheat"
+        for r in board_kinds.get("degraded", []) + board_kinds.get("data_gap", [])
+    ):
+        counters["dashboard_board_errors"] += 1
+    for board_row in board.rows:
+        if (
+            store.get_forecast(board_row.artefact_id) is None
+            and store.get_scenario(board_row.artefact_id) is None
+            and store.get_market_event(board_row.artefact_id) is None
+        ):
+            counters["dashboard_board_errors"] += 1
+    if dashboard_service.board(_date(2026, 2, 15)).board_id != board.board_id:
+        counters["dashboard_board_errors"] += 1
+
+    print("Round 7 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio + R7 prompt-to-dashboard)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]
