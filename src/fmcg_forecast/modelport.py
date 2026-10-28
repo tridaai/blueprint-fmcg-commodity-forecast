@@ -62,6 +62,21 @@ class ModelPort(Protocol):
         """
         ...
 
+    def parse_dashboard(self, *, text: str, context: dict) -> dict:
+        """Read a desk prompt into the dashboard pack's panel set.
+
+        Returns the raw parse (status, panels) or a refusal
+        (status, reason) when there is nothing to parse. Each
+        panel is a catalogue panel or a named gap panel — the
+        parse never drops a clause and never invents a figure.
+        The offline profile performs the pack's stated
+        deterministic grammar; hosted profiles produce the same
+        schema through structured outputs. Either way the caller
+        wraps the panel set in the content-addressed spec
+        artefact and validates it against the pack again.
+        """
+        ...
+
 
 class OfflineModel:
     """Deterministic default: templated commentary from the figures."""
@@ -101,6 +116,20 @@ class OfflineModel:
             "levers": [lever.model_dump(mode="json") for lever in levers],
         }
 
+    def parse_dashboard(self, *, text: str, context: dict) -> dict:
+        """The dashboard pack's stated grammar, performed deterministically."""
+        from fmcg_forecast.dashboards.pack import load_dashboard_pack
+        from fmcg_forecast.dashboards.parse import (
+            DashboardParseRefusal,
+            parse_prompt_text,
+        )
+
+        try:
+            panels = parse_prompt_text(text, load_dashboard_pack())
+        except DashboardParseRefusal as refusal:
+            return {"status": "refused", "reason": str(refusal)}
+        return {"status": "parsed", "panels": panels}
+
 
 class _HostedRefusal:
     """Base for hosted profiles: configured-or-refuse, no fake calls."""
@@ -125,6 +154,13 @@ class _HostedRefusal:
         )
 
     def parse_scenario(self, *, text: str, events: list[dict]) -> dict:
+        raise ModelNotConfiguredError(
+            f"model profile '{self.profile_name}' is configured but its live "
+            f"client is not wired in this round ({self._detail}); refusing "
+            "rather than faking a model call"
+        )
+
+    def parse_dashboard(self, *, text: str, context: dict) -> dict:
         raise ModelNotConfiguredError(
             f"model profile '{self.profile_name}' is configured but its live "
             f"client is not wired in this round ({self._detail}); refusing "
