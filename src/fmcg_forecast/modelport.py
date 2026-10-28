@@ -47,6 +47,21 @@ class ModelPort(Protocol):
         """
         ...
 
+    def parse_scenario(self, *, text: str, events: list[dict]) -> dict:
+        """Read a desk what-if into the scenario pack's lever set.
+
+        Returns the raw parse (status, levers) or a refusal
+        (status, clause, reason) naming the part that does not
+        fit the bounded catalogue. ``events`` is the resolution
+        context for event references (event_id + event_class
+        dicts). The offline profile performs the pack's stated
+        deterministic grammar; hosted profiles produce the same
+        schema through structured outputs. Either way the caller
+        wraps the lever set in the content-addressed request
+        artefact and validates it against the pack again.
+        """
+        ...
+
 
 class OfflineModel:
     """Deterministic default: templated commentary from the figures."""
@@ -66,6 +81,26 @@ class OfflineModel:
 
         return extract_headline(headline, load_sentiment_pack())
 
+    def parse_scenario(self, *, text: str, events: list[dict]) -> dict:
+        """The scenario pack's stated grammar, performed deterministically."""
+        from fmcg_forecast.scenarios.pack import load_scenario_pack
+        from fmcg_forecast.scenarios.parse import ParseRefusal, parse_request_text
+
+        try:
+            levers = parse_request_text(
+                text, events=events, pack=load_scenario_pack()
+            )
+        except ParseRefusal as refusal:
+            return {
+                "status": "refused",
+                "clause": refusal.clause,
+                "reason": refusal.reason,
+            }
+        return {
+            "status": "parsed",
+            "levers": [lever.model_dump(mode="json") for lever in levers],
+        }
+
 
 class _HostedRefusal:
     """Base for hosted profiles: configured-or-refuse, no fake calls."""
@@ -83,6 +118,13 @@ class _HostedRefusal:
         )
 
     def extract_sentiment(self, *, headline: str) -> dict:
+        raise ModelNotConfiguredError(
+            f"model profile '{self.profile_name}' is configured but its live "
+            f"client is not wired in this round ({self._detail}); refusing "
+            "rather than faking a model call"
+        )
+
+    def parse_scenario(self, *, text: str, events: list[dict]) -> dict:
         raise ModelNotConfiguredError(
             f"model profile '{self.profile_name}' is configured but its live "
             f"client is not wired in this round ({self._detail}); refusing "

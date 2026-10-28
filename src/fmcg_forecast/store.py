@@ -25,6 +25,11 @@ from fmcg_forecast.forecast.models import (
 )
 from fmcg_forecast.migrations import apply_migrations
 from fmcg_forecast.models import EventRecord, Manifest, Observation
+from fmcg_forecast.scenarios.models import (
+    ScenarioAdoption,
+    ScenarioRequest,
+    ScenarioRun,
+)
 from fmcg_forecast.sentiment.models import (
     SentimentCorpusManifest,
     SentimentExtraction,
@@ -103,6 +108,22 @@ class Store(Protocol):
     def list_market_events(
         self, commodity: str | None = None
     ) -> list[MarketEvent]: ...
+    # -- scenario studio (R6) ------------------------------------------
+    def insert_scenario_request(self, request: ScenarioRequest) -> None: ...
+    def get_scenario_request(self, request_id: str) -> ScenarioRequest | None: ...
+    def list_scenario_requests(
+        self, commodity: str | None = None, market: str | None = None
+    ) -> list[ScenarioRequest]: ...
+    def insert_scenario(self, run: ScenarioRun) -> None: ...
+    def get_scenario(self, scenario_id: str) -> ScenarioRun | None: ...
+    def list_scenarios(
+        self, commodity: str | None = None, market: str | None = None
+    ) -> list[ScenarioRun]: ...
+    def set_scenario_status(self, scenario_id: str, status: str) -> None: ...
+    def insert_scenario_adoption(self, adoption: ScenarioAdoption) -> None: ...
+    def get_scenario_adoption(
+        self, scenario_id: str
+    ) -> ScenarioAdoption | None: ...
     def close(self) -> None: ...
 
 
@@ -735,6 +756,147 @@ class SqlStore:
         return [
             MarketEvent.model_validate(json.loads(r[0])) for r in cur.fetchall()
         ]
+
+    # -- scenario studio (R6) ------------------------------------------
+    # Requests and runs are insert-only, like forecasts: the
+    # service checks the content address before inserting, so a
+    # re-parse or re-run is a no-op rather than a duplicate-write
+    # error. A run's payload is stored without its lifecycle
+    # status (the status column is the state of record, flipped
+    # only by set_scenario_status when an adoption act lands).
+
+    def insert_scenario_request(self, request: ScenarioRequest) -> None:
+        sql = self._q(
+            "INSERT INTO scenario_requests (request_id, commodity, "
+            "market, payload) VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                request.request_id,
+                request.commodity,
+                request.market,
+                request.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_scenario_request(self, request_id: str) -> ScenarioRequest | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM scenario_requests WHERE request_id = ?"
+            ),
+            (request_id,),
+        )
+        row = cur.fetchone()
+        return ScenarioRequest.model_validate(json.loads(row[0])) if row else None
+
+    def list_scenario_requests(
+        self, commodity: str | None = None, market: str | None = None
+    ) -> list[ScenarioRequest]:
+        sql = "SELECT payload FROM scenario_requests"
+        params: list = []
+        clauses = []
+        if commodity is not None:
+            clauses.append("commodity = ?")
+            params.append(commodity)
+        if market is not None:
+            clauses.append("market = ?")
+            params.append(market)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY request_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            ScenarioRequest.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    def insert_scenario(self, run: ScenarioRun) -> None:
+        sql = self._q(
+            "INSERT INTO scenarios (scenario_id, base_forecast_id, "
+            "commodity, market, status, payload) "
+            "VALUES (?, ?, ?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                run.scenario_id,
+                run.base_forecast_id,
+                run.commodity,
+                run.market,
+                run.status,
+                run.model_dump_json(exclude={"status"}),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def _scenario_from_row(self, row) -> ScenarioRun:
+        payload = json.loads(row[0])
+        payload["status"] = row[1]
+        return ScenarioRun.model_validate(payload)
+
+    def get_scenario(self, scenario_id: str) -> ScenarioRun | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload, status FROM scenarios WHERE scenario_id = ?"
+            ),
+            (scenario_id,),
+        )
+        row = cur.fetchone()
+        return self._scenario_from_row(row) if row else None
+
+    def list_scenarios(
+        self, commodity: str | None = None, market: str | None = None
+    ) -> list[ScenarioRun]:
+        sql = "SELECT payload, status FROM scenarios"
+        params: list = []
+        clauses = []
+        if commodity is not None:
+            clauses.append("commodity = ?")
+            params.append(commodity)
+        if market is not None:
+            clauses.append("market = ?")
+            params.append(market)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY scenario_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [self._scenario_from_row(r) for r in cur.fetchall()]
+
+    def set_scenario_status(self, scenario_id: str, status: str) -> None:
+        self._conn.execute(
+            self._q("UPDATE scenarios SET status = ? WHERE scenario_id = ?"),
+            (status, scenario_id),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def insert_scenario_adoption(self, adoption: ScenarioAdoption) -> None:
+        sql = self._q(
+            "INSERT INTO scenario_adoptions (adoption_id, scenario_id, "
+            "payload) VALUES (?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (adoption.adoption_id, adoption.scenario_id, adoption.model_dump_json()),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_scenario_adoption(
+        self, scenario_id: str
+    ) -> ScenarioAdoption | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM scenario_adoptions WHERE scenario_id = ?"
+            ),
+            (scenario_id,),
+        )
+        row = cur.fetchone()
+        return ScenarioAdoption.model_validate(json.loads(row[0])) if row else None
 
     def close(self) -> None:
         self._conn.close()

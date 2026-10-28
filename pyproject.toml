@@ -40,6 +40,7 @@ dev = [
 [project.scripts]
 fmcg-agent-demo = "fmcg_forecast.demo:main"
 fmcg-agent-serve = "fmcg_forecast.serve:main"
+fmcg-agent-scenarios = "fmcg_forecast.scenarios.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fmcg_forecast"]

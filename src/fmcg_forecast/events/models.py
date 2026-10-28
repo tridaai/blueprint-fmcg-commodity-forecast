@@ -108,9 +108,11 @@ class MarketEvent(BaseModel):
     declared_by: str = Field(description="The named analyst (or record) that declared the event")
     declared_on: date
     pack_version: str
-    origin: Literal["declared", "historical"] = Field(
+    origin: Literal["declared", "historical", "scenario"] = Field(
         description="declared: a desk analyst's act. historical: "
-        "seeded from the dataset manifest's planted record"
+        "seeded from the dataset manifest's planted record. "
+        "scenario: created by a scenario lever (R6) — lives on "
+        "its scenario run, never in the registry"
     )
     source_record_id: str | None = Field(
         description="For historical events, the manifest record "

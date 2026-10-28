@@ -63,6 +63,16 @@ contribution and the failing floor named — following the same
 honesty pattern as coffee's named data gaps. When no sentiment
 input is supplied at all, the engine behaves exactly as it did
 before R4.
+
+Scenarios (R6, Law 5): the engine accepts driver shifts and a
+sentiment start override — perturbations of the future INPUT
+paths, computed by the scenario layer from the pack's bounded
+levers. Estimation never sees them (coefficients, persistence
+and the baseline are history's), the telescoping attribution
+runs over the shifted paths exactly as over unshifted ones, and
+each shifted line records the application in its summary. A
+shift for a driver the run did not estimate is refused. With no
+shifts handed in, the engine behaves exactly as it did before R6.
 """
 
 from __future__ import annotations
@@ -71,7 +81,7 @@ import hashlib
 import json
 import math
 from datetime import date, timedelta
-from typing import Protocol
+from typing import Literal, Protocol
 
 import numpy as np
 from pydantic import BaseModel, Field
@@ -148,6 +158,29 @@ class EventAdjustment(BaseModel):
         "event's path is non-zero (the event pack states 1.25; "
         "1.0 = no widening)",
     )
+
+
+class DriverShift(BaseModel):
+    """A scenario lever's hand-off to the engine (R6, Law 5).
+
+    A shift moves a driver's future INPUT path — never the
+    output price: ``add`` adds ``value`` (in the driver's input
+    units) to the path on every horizon day; ``add_clip`` adds
+    and then clips the path to the stated range (the weather
+    index's own bounds). The scenario layer computes the value
+    from the lever by the scenario pack's stated conversion and
+    records it on the run; the engine merely applies what it is
+    handed, and records the application on the line's summary so
+    the artefact states that its path was shifted, and by how
+    much. With no shifts handed in, the engine behaves exactly
+    as it did before R6.
+    """
+
+    driver: str = Field(description="The contribution line whose input path moves")
+    mode: Literal["add", "add_clip"]
+    value: float = Field(description="The shift in the driver's input units")
+    clip_min: float | None = None
+    clip_max: float | None = None
 
 
 class SentimentInput(BaseModel):
@@ -276,6 +309,8 @@ def run_engine(
     via_backtest: bool = False,
     event_adjustments: list[EventAdjustment] | tuple[EventAdjustment, ...] = (),
     sentiment_input: SentimentInput | None = None,
+    driver_shifts: list[DriverShift] | tuple[DriverShift, ...] = (),
+    sentiment_start_override: float | None = None,
 ) -> Forecast:
     """Run the stated method and return the forecast artefact (draft)."""
     if as_of >= manifest.future_start and not via_backtest:
@@ -423,12 +458,70 @@ def run_engine(
     future_design = baseline_design(future_dates)
     log_baseline = future_design @ base_coef
 
+    # --- scenario shifts (R6, Law 5) --------------------------------
+    # Levers move driver inputs, never the output: the sentiment
+    # override replaces the sentiment path's starting value before
+    # the paths are built (so the line's recorded last input is
+    # the override, stated on its face), and driver shifts then
+    # move the built paths. A shift naming a driver this run did
+    # not estimate — unreported, or sentiment not estimable — is
+    # refused with the driver named: a scenario may not move a
+    # line that does not exist.
+    shift_markers: dict[str, dict] = {}
+    if sentiment_start_override is not None:
+        if "sentiment" not in line_names:
+            raise ForecastError(
+                "a sentiment override was handed in, but this run "
+                "has no estimated sentiment line to override — the "
+                "driver is unreported or not estimable for this "
+                "series, and a scenario cannot move it"
+            )
+        shift_markers["sentiment"] = {
+            "mode": "set_start",
+            "value": sentiment_start_override,
+        }
+        last_input["sentiment"] = float(sentiment_start_override)
+
     input_paths: dict[str, np.ndarray] = {
         name: np.array(
             [last_input[name] * persistence[name] ** h for h in range(1, FORECAST_DAYS + 1)]
         )
         for name in line_names
     }
+    seen_shift_drivers: set[str] = set()
+    for shift in driver_shifts:
+        if shift.driver in seen_shift_drivers:
+            raise ForecastError(
+                f"driver {shift.driver} is shifted twice; each "
+                "driver's input path moves once per run"
+            )
+        seen_shift_drivers.add(shift.driver)
+        if shift.driver not in input_paths:
+            raise ForecastError(
+                f"a shift was handed in for driver {shift.driver}, "
+                "but this run has no such input path — the driver "
+                "is unreported or not estimable for this series, "
+                "and a scenario cannot move it"
+            )
+        if shift.mode == "add":
+            input_paths[shift.driver] = input_paths[shift.driver] + shift.value
+        else:  # add_clip
+            if shift.clip_min is None or shift.clip_max is None:
+                raise ForecastError(
+                    f"driver {shift.driver} shift is add_clip "
+                    "without stated clip bounds"
+                )
+            input_paths[shift.driver] = np.clip(
+                input_paths[shift.driver] + shift.value,
+                shift.clip_min,
+                shift.clip_max,
+            )
+        shift_markers[shift.driver] = {
+            "mode": shift.mode,
+            "value": shift.value,
+            "clip_min": shift.clip_min,
+            "clip_max": shift.clip_max,
+        }
     log_contrib = {
         name: coefficients[name] * input_paths[name] for name in line_names
     }
@@ -500,6 +593,17 @@ def run_engine(
 
     lines: list[ContributionLine] = []
     for name in line_names:
+        summary: dict = {
+            "transform": _TRANSFORMS[name],
+            "last_observed_date": reg_days[-1].isoformat(),
+            "last_input": round(last_input[name], 4),
+            "persistence": round(persistence[name], 4),
+            "estimation_obs": len(reg_days),
+        }
+        if name in shift_markers:
+            # The line states on its face that a scenario lever
+            # moved its input path, and by how much (R6).
+            summary["scenario_shift"] = shift_markers[name]
         lines.append(
             ContributionLine(
                 driver=name,
@@ -507,13 +611,7 @@ def run_engine(
                 input_path=[round(float(v), 4) for v in input_paths[name]],
                 contribution_path_inr=contrib_paths_inr[name],
                 at_horizon=at_horizon(contrib_paths_inr[name]),
-                input_summary={
-                    "transform": _TRANSFORMS[name],
-                    "last_observed_date": reg_days[-1].isoformat(),
-                    "last_input": round(last_input[name], 4),
-                    "persistence": round(persistence[name], 4),
-                    "estimation_obs": len(reg_days),
-                },
+                input_summary=summary,
             )
         )
     if sentiment_not_estimable is not None and sentiment_input is not None:
