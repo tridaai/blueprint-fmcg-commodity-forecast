@@ -23,6 +23,12 @@ Every surface (API, CLI/demo) shares this service. Its rules:
   commentary drafts pass a second gate: every sentiment claim in
   the text must cite items whose stored extractions support it.
   Unwired, both behaviours are exactly as before.
+- when an events provider is wired (R5, Law 4), a run that was not
+  handed explicit event adjustments asks the registry for the
+  declared events touching its forecast window; each applied
+  event lands on the artefact as its own named line, with the
+  pack's interval widening. Unwired — or with an empty registry —
+  the events slot stays exactly as it was.
 """
 
 from __future__ import annotations
@@ -97,11 +103,13 @@ class ForecastService:
         model: ModelPort,
         sentiment_provider: Callable[[str, date], SentimentInput | None] | None = None,
         sentiment_claim_verifier: Callable[[str, Forecast], list[str]] | None = None,
+        events_provider: Callable[[str, date], list[EventAdjustment]] | None = None,
     ):
         self.store = store
         self.model = model
         self.sentiment_provider = sentiment_provider
         self.sentiment_claim_verifier = sentiment_claim_verifier
+        self.events_provider = events_provider
 
     # -- runs ---------------------------------------------------------
     def run_forecast(
@@ -122,6 +130,9 @@ class ForecastService:
             if self.sentiment_provider is not None
             else None
         )
+        adjustments = event_adjustments
+        if not adjustments and self.events_provider is not None:
+            adjustments = self.events_provider(commodity, effective_as_of)
         forecast = run_engine(
             self.store,
             manifest,
@@ -129,7 +140,7 @@ class ForecastService:
             market,
             effective_as_of,
             via_backtest=via_backtest,
-            event_adjustments=event_adjustments,
+            event_adjustments=adjustments,
             sentiment_input=sentiment_input,
         )
         forecast = self._attach_accuracy(forecast)
@@ -247,6 +258,37 @@ class ForecastService:
             "market": forecast.market,
             "state": line.input_summary.get("state", "estimated"),
             "line": line.model_dump(mode="json"),
+        }
+
+    def events_view(self, forecast_id: str) -> dict:
+        """The forecast's declared-event lines, as their own read (R5).
+
+        ``state`` is ``clear`` when no declared event touched the
+        run's window (the events adjustment is zero throughout)
+        and ``shocked`` when at least one did — each such event
+        with its own log path, INR contribution path and the
+        interval widening it carried.
+        """
+        forecast = self.get_forecast(forecast_id)
+        line = next(
+            (line for line in forecast.lines if line.driver == "events"), None
+        )
+        per_event = (line.input_summary.get("per_event") if line else None) or {}
+        return {
+            "forecast_id": forecast.forecast_id,
+            "commodity": forecast.commodity,
+            "market": forecast.market,
+            "as_of": forecast.as_of.isoformat(),
+            "state": "shocked" if per_event else "clear",
+            "events_applied": list(forecast.method.events_applied),
+            "interval_widening": (
+                line.input_summary.get("interval_widening") if line else None
+            ),
+            "events": [
+                {"event_id": event_id, **entry}
+                for event_id, entry in per_event.items()
+            ],
+            "line": line.model_dump(mode="json") if line is not None else None,
         }
 
     def accuracy_view(self, forecast_id: str) -> dict:

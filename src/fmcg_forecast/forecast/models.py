@@ -76,8 +76,10 @@ class ForecastDay(BaseModel):
         "it is its own field)"
     )
     events_adjustment: float = Field(
-        description="Declared-event adjustment in INR/quintal. The slot "
-        "exists from R2; the event registry fills it in R5. Zero until then."
+        description="Declared-event adjustment in INR/quintal: the sum "
+        "of the applied events' own telescoped steps (each event's "
+        "path is recorded on the events line, R5). Zero when no "
+        "declared event touches the day."
     )
     p10: float
     p50: float = Field(
@@ -141,7 +143,8 @@ class ForecastMethod(BaseModel):
     rounding: str = "INR figures rounded to 2dp; the decomposition is exact to the paisa by construction"
     events_applied: list[str] = Field(
         default_factory=list,
-        description="Declared events whose adjustments are in this forecast (R5; empty in R2)",
+        description="Declared events whose adjustments are in this "
+        "forecast (R5), in the order they were telescoped",
     )
 
 

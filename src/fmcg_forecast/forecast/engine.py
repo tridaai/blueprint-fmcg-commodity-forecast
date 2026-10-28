@@ -39,9 +39,16 @@ sealed rows behind the truth store (which this package never
 imports).
 
 Events: the engine accepts declared event adjustments as an input
-slot (a per-day log-price path per event). Round 2 ships the slot
-empty; the event registry fills it in R5, where an event's
-contribution will appear as its own line instead of being absorbed.
+slot (a per-day log-price path per event). Round 2 shipped the
+slot empty; the event registry fills it in R5 (Law 4). Each event
+is telescoped separately, in the order given, after the drivers:
+the events line records every event's own INR contribution path
+(``per_event`` in its input summary), so a shocked forecast shows
+each shock as its own named line instead of one absorbed total.
+An adjustment may also carry an interval widening factor: on any
+day where an event's path is non-zero, the interval growth factor
+is multiplied by the widest active factor — the event pack states
+the factor (1.25); the engine merely applies what it is handed.
 
 Sentiment (R4, Law 3): the engine accepts a sentiment input — the
 weekly index carried daily, supplied by the sentiment service —
@@ -128,13 +135,19 @@ class UnknownSeriesError(ForecastError):
 class EventAdjustment(BaseModel):
     """A declared event's per-day log-price adjustment path.
 
-    The R5 event registry produces these from EventRecords; R2 ships
-    the slot empty and the engine simply validates and applies any
-    path it is handed.
+    The R5 event registry produces these from MarketEvents (the
+    pack's stated path rule); the engine validates and applies any
+    path it is handed, telescoping each event separately.
     """
 
     event_id: str
     path: list[float] = Field(description="Log-price adjustment per horizon day")
+    interval_widening: float = Field(
+        default=1.0,
+        description="Interval growth multiplier on days where this "
+        "event's path is non-zero (the event pack states 1.25; "
+        "1.0 = no widening)",
+    )
 
 
 class SentimentInput(BaseModel):
@@ -383,11 +396,24 @@ def run_engine(
     calendar_days = (as_of - manifest.history_start).days + 1
     sparsity_multiplier = math.sqrt(calendar_days / len(days_obs))
 
+    seen_event_ids: set[str] = set()
     for adj in event_adjustments:
         if len(adj.path) != FORECAST_DAYS:
             raise ForecastError(
                 f"event adjustment {adj.event_id} carries {len(adj.path)} days; "
                 f"the slot requires exactly {FORECAST_DAYS}"
+            )
+        if adj.event_id in seen_event_ids:
+            raise ForecastError(
+                f"event adjustment {adj.event_id} is applied twice; each "
+                "declared event enters a run once"
+            )
+        seen_event_ids.add(adj.event_id)
+        if adj.interval_widening < 1.0:
+            raise ForecastError(
+                f"event adjustment {adj.event_id} carries interval "
+                f"widening {adj.interval_widening} below 1.0 — a shock "
+                "may widen a band or leave it, never narrow it"
             )
     events_log = np.zeros(FORECAST_DAYS)
     for adj in event_adjustments:
@@ -410,6 +436,9 @@ def run_engine(
     days: list[ForecastDay] = []
     contrib_paths_inr: dict[str, list[float]] = {name: [] for name in line_names}
     events_path_inr: list[float] = []
+    per_event_paths_inr: dict[str, list[float]] = {
+        adj.event_id: [] for adj in event_adjustments
+    }
     for h in range(1, FORECAST_DAYS + 1):
         i = h - 1
         level = math.exp(float(log_baseline[i]))
@@ -423,10 +452,24 @@ def run_engine(
             contributions[name] = value
             contrib_paths_inr[name].append(value)
             level = new_level
-        events_value = round(math.exp(running + float(events_log[i])) - level, 2)
+        # Events telescope separately, in the order given, so each
+        # event's own INR path is a recorded line — never one
+        # absorbed total (Law 4). The day's events adjustment is
+        # the sum of the per-event steps, so the decomposition
+        # stays exact by construction.
+        events_value = 0.0
+        widening = 1.0
+        for adj in event_adjustments:
+            step = round(math.exp(running + float(adj.path[i])) - level, 2)
+            running += float(adj.path[i])
+            level = math.exp(running)
+            per_event_paths_inr[adj.event_id].append(step)
+            events_value = round(events_value + step, 2)
+            if adj.path[i] != 0.0:
+                widening = max(widening, adj.interval_widening)
         events_path_inr.append(events_value)
         p50 = round(baseline_inr + sum(contributions.values()) + events_value, 2)
-        g = growth(h) * sparsity_multiplier
+        g = growth(h) * sparsity_multiplier * widening
         days.append(
             ForecastDay(
                 forecast_date=future_dates[i],
@@ -510,6 +553,28 @@ def run_engine(
                         "cited_item_ids": list(sentiment_input.cited_item_ids),
                     }
                 )
+    events_summary: dict = {
+        "transform": "declared event adjustment path (log price)",
+        "applied_events": [a.event_id for a in event_adjustments],
+        "estimation_obs": 0,
+    }
+    if event_adjustments:
+        # Each event's own line, recorded on the artefact: its log
+        # path, its telescoped INR path, and the widening it
+        # carried. Present only when events were applied, so an
+        # unshocked forecast is byte-identical to its pre-R5 form.
+        events_summary["per_event"] = {
+            adj.event_id: {
+                "input_path": [round(float(v), 4) for v in adj.path],
+                "contribution_path_inr": per_event_paths_inr[adj.event_id],
+                "at_horizon": at_horizon(per_event_paths_inr[adj.event_id]),
+                "interval_widening": adj.interval_widening,
+            }
+            for adj in event_adjustments
+        }
+        events_summary["interval_widening"] = max(
+            adj.interval_widening for adj in event_adjustments
+        )
     lines.append(
         ContributionLine(
             driver="events",
@@ -517,11 +582,7 @@ def run_engine(
             input_path=[round(float(v), 4) for v in events_log],
             contribution_path_inr=events_path_inr,
             at_horizon=at_horizon(events_path_inr),
-            input_summary={
-                "transform": "declared event adjustment path (log price)",
-                "applied_events": [a.event_id for a in event_adjustments],
-                "estimation_obs": 0,
-            },
+            input_summary=events_summary,
         )
     )
 

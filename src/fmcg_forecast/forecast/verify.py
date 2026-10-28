@@ -89,6 +89,38 @@ def verify_forecast(forecast: Forecast) -> list[str]:
                     f"path value {line.contribution_path_inr[h - 1]}"
                 )
 
+    # Per-event lines (R5): each declared event's own INR path is
+    # recorded on the events line; the paths must sum to the day
+    # adjustments they compose, and each at_horizon must match its
+    # path. Absent on unshocked forecasts — nothing to check there.
+    events_line = lines_by_driver.get("events")
+    per_event = (
+        events_line.input_summary.get("per_event") if events_line is not None else None
+    ) or {}
+    for event_id, entry in per_event.items():
+        path = entry.get("contribution_path_inr", [])
+        if len(path) != FORECAST_DAYS:
+            problems.append(
+                f"event {event_id}: contribution path is not {FORECAST_DAYS} days"
+            )
+            continue
+        for h in HORIZONS:
+            if abs(entry["at_horizon"][str(h)] - path[h - 1]) > ROUNDING_TOLERANCE:
+                problems.append(
+                    f"event {event_id}: at_horizon[{h}] {entry['at_horizon'][str(h)]} "
+                    f"!= path value {path[h - 1]}"
+                )
+    if per_event:
+        for i, day in enumerate(forecast.days):
+            total = sum(
+                entry["contribution_path_inr"][i] for entry in per_event.values()
+            )
+            if abs(total - day.events_adjustment) > ROUNDING_TOLERANCE * len(per_event):
+                problems.append(
+                    f"{day.forecast_date}: per-event contributions sum to "
+                    f"{total}, != events adjustment {day.events_adjustment}"
+                )
+
     for summary in forecast.horizons_summary:
         day = forecast.days[summary.horizon_days - 1]
         if (
