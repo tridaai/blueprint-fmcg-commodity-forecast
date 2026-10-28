@@ -27,12 +27,16 @@
 | Migrations | `migrations.py`, `migrations/{sqlite,postgres}/` | Numbered SQL files + a ledger table; idempotent runner shared by both stores. |
 | Ingest workflow | `workflow.py` | LangGraph graph: `generate → persist → verify`. Idempotent at the workflow level (same seed + digest verifies and stops); the store stays insert-only underneath. |
 | Model port | `modelport.py` | Language only (Law 1). Offline deterministic default; hosted profiles refuse loudly until configured. |
-| API | `api.py` | Read surfaces: `/series`, `/events`, `/manifest`, `/coverage/{commodity}`, `/catalogue`, `/health`, `/readiness`; forecast surface (R2): `/forecasts/run`, `/forecasts/{id}` + `/contributions`, `/verify`, `/approve`, `/approval`, `/commentary`. JSON logs + request id on every response. |
+| API | `api.py` | Read surfaces: `/series`, `/events`, `/manifest`, `/coverage/{commodity}`, `/catalogue`, `/health`, `/readiness`; forecast surface (R2): `/forecasts/run`, `/forecasts/{id}` + `/contributions`, `/verify`, `/approve`, `/approval`, `/commentary`; accuracy surface (R3): `/backtests/run`, `/backtests` + `/{id}`, `/accuracy`, `/accuracy/{commodity}/{market}/{horizon}`, `/forecasts/{id}/accuracy`. JSON logs + request id on every response. |
 | Forecast package | `forecast/` | The engine (R2). Its `__init__` states the isolation law it is graded on: the package reads observations through the store port only, never the truth store. |
 | Forecast engine | `forecast/engine.py` | The stated method: OLS baseline (trend + day-of-year seasonality on log price); baseline residuals regressed on standardised driver inputs (arrivals = z(log arrivals), stock = z(level), trade = z(imports − exports), weather = raw); driver paths projected as last input × persistence^h; sequential (telescoping) attribution in the order arrivals → stock → trade → weather → events, so the decomposition sums to the total to the paisa; intervals from rolling 365-observation residual quantiles, AR-propagated and widened by the sparsity multiplier √(calendar/observed days). Refuses an `as_of` inside the sealed window unless invoked via the backtest path; refuses thin history (< 250 observations or < 730 days span) by naming it. |
 | Forecast verifier | `forecast/verify.py` | Re-performs a stored artefact: re-adds every day, checks line paths against day values, horizon summaries against day rows, interval ordering, and the content address. Any tamper fails here. |
 | Commentary | `forecast/commentary.py` | Builds the figure set from the artefact and verifies model drafts against it: every decimal figure in a draft must be an artefact figure, or the draft is refused wholesale. |
-| Forecast service | `forecast/service.py` | The one workflow every surface shares: idempotent runs (content-addressed artefacts), the draft → official approval act (named approver + role; placeholders and repeat approvals refused), figure-verified commentary drafting. |
+| Forecast service | `forecast/service.py` | The one workflow every surface shares: idempotent runs (content-addressed artefacts), the draft → official approval act (named approver + role; placeholders and repeat approvals refused), figure-verified commentary drafting, and — R3 — pinning the accuracy ledger's current records onto each run as a self-contained snapshot whose state (measured / degraded / unmeasured) no read path can suppress. |
+| Accuracy pack | `backtest/pack.py` | The backtest grid and ledger rules as versioned data: first-of-month origins Jan–Oct 2025, horizons 7/30/90, ledger window of the most recent 6 origins, degraded bar at pooled MAPE > 5.0%. Fail-closed loader; every result and record names the pack version it was built under. |
+| Backtest metrics | `backtest/metrics.py` | Pure computation: scored days (only days carrying a realised observation) summed per result — error, absolute error, absolute percentage, band coverage counted exactly — with MAE/MAPE/bias/coverage derived from the rounded sums by stated formulas; the ledger aggregation pools those sums over the window (day-weighted) and stamps `degraded`. |
+| Backtest harness | `backtest/harness.py` | Rolling-origin runs through the engine's `via_backtest` seam over observed history (never the truth store), storing content-addressed results idempotently and recording refused origins (coffee, before it can state the method) as named skips; then the ledger rebuild. `score_sealed_boundary` scores a boundary forecast against rows a grader hands in — the eval gate composes the sealed check from it. |
+| Backtest verifier | `backtest/verify.py` | Re-performs a stored result from its own scored days and a ledger record from the result artefacts of record; any tamper or drift fails. |
 
 ## Data design
 
@@ -58,7 +62,10 @@ LangGraph state machine whose transitions are stored artefacts:
 
 - **compute** (R2–R3): the stated forecast engine — trend/seasonal
   baseline + per-driver contributions — landed in R2; rolling-origin
-  backtests and the accuracy ledger land in R3 (Law 2).
+  backtests and the accuracy ledger landed in R3 (Law 2): every
+  forecast now pins the ledger's records for its series, degraded
+  where the pooled MAPE crosses the pack's stated bar, unmeasured
+  (named) where the harness has not covered the series yet.
 - **explain** (R4): sentiment as a scored pack with provenance;
   commentary drafted by the model port around computed figures only.
 - **scenario** (R5–R6): declared events and bounded lever forks,

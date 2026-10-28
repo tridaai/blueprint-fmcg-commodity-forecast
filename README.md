@@ -130,6 +130,54 @@ and a frozen `constraints.txt` · multi-stage non-root Docker.
   the demo walks a wheat forecast from run to official view, and coffee's
   honest band.
 
+## What Round 3 adds
+
+- **The backtest harness** — rolling-origin evaluation over observed
+  history: monthly origins through 2025 (first-of-month, Jan–Oct), the
+  engine run at each origin through its `via_backtest` seam and scored
+  at 7/30/90 days against the realised prices in the observations
+  table — never the sealed store. The grid is stated in a versioned
+  **accuracy pack** (origins, horizons, ledger window, degraded bar)
+  and bounded: 135 engine runs, 405 stored results. Origins the
+  engine cannot yet state its method for are recorded as skips with
+  the refusal named — coffee's first five origins (it needs 250
+  reporting days; it has 209 in January) — never silently dropped.
+- **Scored days, counted exactly** — a result's days are the days in
+  the horizon window carrying a realised observation (Sundays are
+  excluded, never imputed); per day, error, absolute error, absolute
+  percentage and band coverage are summed as the primitive record,
+  and MAE / MAPE / bias / coverage derive from those sums by stated
+  formulas. A verifier re-performs every figure from the artefact
+  alone, and the hand-computed fixtures in the tests pin the
+  arithmetic.
+- **The accuracy ledger** — one record per series × horizon, pooled
+  day-weighted over the most recent 6 origins (never a mean of
+  means). Rebuilding the ledger re-performs the aggregation from the
+  result artefacts of record; a verifier detects any drift between
+  the ledger and its results.
+- **Forecasts carry their accuracy (Law 2)** — a run pins the
+  ledger's current records onto the forecast as a self-contained
+  snapshot (part of its content address). The pack's bar is pooled
+  MAPE above 5.0%: exactly one series crosses it — **chili at
+  Guntur, the dataset's noisiest series over its planted drought,
+  at 5.16% (30d) and 5.06% (90d)** — and its forecasts are stamped
+  **degraded** on the artefact, in the accuracy read, and in their
+  commentary. The flag is the ledger's judgement copied, never
+  re-judged by a caller, and no read path offers a view without it.
+  A series with no coverage yet reads **unmeasured**, named on the
+  artefact — never a blank.
+- **The sealed-boundary dry run** — the eval gate additionally
+  scores the boundary forecasts (wheat and coffee at the last
+  history day) against the sealed future it hands to the harness's
+  scoring function: forward MAPE under 3.6% at every horizon,
+  coverage 1.00 — the engine's forward accuracy is measurable end
+  to end, and product code still never reads the truth store.
+- **Surfaces** — migration 0003 (backtest results, accuracy
+  records); `POST /backtests/run`, `GET /backtests` (+ `/{id}`),
+  `GET /accuracy`, `GET /accuracy/{commodity}/{market}/{horizon}`,
+  `GET /forecasts/{id}/accuracy`; the demo runs the harness and
+  prints the ledger; the HTTP harness checks the whole surface.
+
 ## Honest status
 
 - **Built and gated in R1:** the spine, generator + manifest, store port +
@@ -145,10 +193,20 @@ and a frozen `constraints.txt` · multi-stage non-root Docker.
   contribution signs on the planted harvest window, coffee gaps/widening,
   tamper detection, sealed-window acceptances, commentary figure
   violations and the events slot.
-- **Not yet built:** backtesting + the accuracy ledger (R3 — until it
-  lands, forecasts do not yet carry their measured accuracy, Law 2),
-  the sentiment pack (R4), event/scenario handling (R5-R6),
-  prompt-to-dashboard (R7), the console (R13). The round map runs
+- **Built and gated in R3:** the backtest harness (accuracy pack as
+  versioned data, monthly 2025 origins, 405 scored results, coffee's
+  five unstatable origins skipped with the refusal named), the accuracy
+  ledger (pooled over the recent 6 origins, re-performable), forecast
+  accuracy attachments (degraded stamped exactly on chili/Guntur at
+  30/90 days; unmeasured named before coverage exists), the
+  sealed-boundary dry run in the eval gate, migration 0003, backtest +
+  accuracy API surfaces, demo + harness walks. Eval gate v3 adds
+  zero-tolerance counters for the grid, hand-computed metric fixtures,
+  result/ledger re-performance, degraded-flag correctness and
+  suppression, unmeasured naming and the sealed check; the truth
+  isolation scan now covers the backtest package too.
+- **Not yet built:** the sentiment pack (R4), event/scenario handling
+  (R5-R6), prompt-to-dashboard (R7), the console (R13). The round map runs
   to R20 and continues past it until the production bar is met.
 - **The dataset in this repo is generated in-repo for the blueprint** — gold
   by construction, so the engine can be graded against a known future.
@@ -186,12 +244,18 @@ src/fmcg_forecast/
   modelport.py     offline default; anthropic/bedrock/nim fail-closed
   api.py           FastAPI surfaces (reads + the forecast surface)
   forecast/        the forecast engine package (truth-isolated):
-    models.py      forecast / approval / commentary artefacts
+    models.py      forecast / approval / commentary artefacts;
+                   backtest results, accuracy records, attachments (R3)
     engine.py      the stated decomposition engine
     verify.py      re-performance verification of stored artefacts
     commentary.py  figure extraction + verification for drafts
     service.py     run / approve / explain — the one workflow
-migrations/        0001-0002 SQL, sqlite + postgres dialects
+  backtest/        the harness package (truth-isolated):
+    pack.py        the accuracy pack: grid, window, degraded bar
+    metrics.py     scored-day sums, derived metrics, aggregation
+    verify.py      re-performance of results and ledger records
+    harness.py     rolling-origin runs + ledger rebuild
+migrations/        0001-0003 SQL, sqlite + postgres dialects
 scripts/           demo.py, local_harness.py
 evals/             the eval gate
 docs/              architecture.md
