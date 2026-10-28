@@ -41,6 +41,11 @@ def apply_migrations(conn, dialect: str, placeholder: str = "?") -> list[str]:
         if path.name in applied:
             continue
         sql = path.read_text(encoding="utf-8")
+        # Strip comment lines first: a ";" inside a comment would
+        # otherwise split a statement in the wrong place.
+        sql = "\n".join(
+            line for line in sql.splitlines() if not line.strip().startswith("--")
+        )
         for statement in sql.split(";"):
             statement = statement.strip()
             if statement:
@@ -49,5 +54,10 @@ def apply_migrations(conn, dialect: str, placeholder: str = "?") -> list[str]:
             f"INSERT INTO schema_migrations (name) VALUES ({placeholder})",
             (path.name,),
         )
+        # Commit per file: sqlite's legacy transaction handling can
+        # otherwise leave the ledger row invisible to a second
+        # connection sharing the file (the truth store migrates too).
+        if hasattr(conn, "commit"):
+            conn.commit()
         done.append(path.name)
     return done

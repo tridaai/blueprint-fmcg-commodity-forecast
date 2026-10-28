@@ -178,8 +178,10 @@ def _series_rows(
     years = np.array([(d - HISTORY_START).days / 365.25 for d in days])
 
     # --- arrivals -------------------------------------------------
-    seasonal_arr = 1.0 + spec.arrivals_seasonal_amp * np.cos(
-        2 * np.pi * (doy - spec.harvest_doy) / 365.25
+    seasonal_arr = np.clip(
+        1.0 + spec.arrivals_seasonal_amp * np.cos(2 * np.pi * (doy - spec.harvest_doy) / 365.25),
+        0.08,
+        None,
     )
     weekday_factor = np.where(weekday == 0, 1.08, np.where(weekday == 5, 0.72, 1.0))
     arrivals = (
