@@ -55,6 +55,16 @@ from fmcg_forecast.forecast.service import (
 )
 from fmcg_forecast.logging_config import new_request_id, request_id_var
 from fmcg_forecast.modelport import ModelPort, OfflineModel
+from fmcg_forecast.scenarios.models import LeverApplication
+from fmcg_forecast.scenarios.pack import load_scenario_pack
+from fmcg_forecast.scenarios.service import (
+    AdoptionStateError,
+    AdoptionValidationError,
+    ScenarioNotFoundError,
+    ScenarioParseError,
+    ScenarioService,
+    ScenarioValidationError,
+)
 from fmcg_forecast.sentiment.service import (
     SentimentConflictError,
     SentimentService,
@@ -97,6 +107,32 @@ class RegisterEventRequest(BaseModel):
     declared_on: date | None = None
 
 
+class ParseScenarioRequest(BaseModel):
+    commodity: str
+    market: str
+    text: str
+    base_forecast_id: str | None = None
+
+
+class CreateScenarioRequest(BaseModel):
+    commodity: str
+    market: str
+    levers: list[LeverApplication]
+
+
+class RunScenarioRequest(BaseModel):
+    request_id: str
+    base_forecast_id: str
+    author: str
+    created_on: date | None = None
+
+
+class AdoptScenarioRequest(BaseModel):
+    adopter: str
+    role: str
+    decided_on: date | None = None
+
+
 def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     model_port = model or OfflineModel()
     sentiment = SentimentService(store, model_port)
@@ -108,12 +144,20 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
         sentiment_claim_verifier=sentiment.verify_claims,
         events_provider=event_service.forecast_adjustments,
     )
+    scenario_service = ScenarioService(
+        store,
+        model_port,
+        service,
+        event_service,
+        sentiment_provider=sentiment.forecast_input,
+    )
     app = FastAPI(
         title="FMCG Commodity Forecast — Operations API",
-        version="0.5.0",
+        version="0.6.0",
         description="Read surfaces for the commodity price & driver store, "
         "the governed forecast surface, the backtest/accuracy surface, "
-        "the sentiment surface, and the event registry.",
+        "the sentiment surface, the event registry, and the scenario "
+        "studio.",
     )
 
     @app.middleware("http")
@@ -415,6 +459,161 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except EventValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # -- the scenario studio (R6, Law 5) -------------------------------
+
+    @app.get("/scenarios/pack")
+    def scenario_pack() -> dict:
+        return load_scenario_pack().model_dump(mode="json")
+
+    @app.post("/scenarios/requests", status_code=201)
+    def parse_scenario_request(body: ParseScenarioRequest) -> dict:
+        try:
+            request = scenario_service.parse_request(
+                body.commodity, body.market, body.text, body.base_forecast_id
+            )
+        except ForecastNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ScenarioParseError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": str(exc),
+                    "clause": exc.clause,
+                    "reason": exc.reason,
+                },
+            ) from exc
+        except ScenarioValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return request.model_dump(mode="json")
+
+    @app.post("/scenarios/requests/structured", status_code=201)
+    def create_scenario_request(body: CreateScenarioRequest) -> dict:
+        try:
+            request = scenario_service.create_request(
+                body.commodity, body.market, body.levers
+            )
+        except ScenarioValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return request.model_dump(mode="json")
+
+    @app.get("/scenarios/requests")
+    def list_scenario_requests(
+        commodity: str | None = Query(None), market: str | None = Query(None)
+    ) -> dict:
+        found = scenario_service.list_requests(commodity, market)
+        return {"requests": [r.model_dump(mode="json") for r in found]}
+
+    @app.get("/scenarios/requests/{request_id}")
+    def get_scenario_request(request_id: str) -> dict:
+        try:
+            return scenario_service.get_request(request_id).model_dump(mode="json")
+        except ScenarioNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/scenarios", status_code=201)
+    def run_scenario(body: RunScenarioRequest) -> dict:
+        try:
+            run = scenario_service.run_scenario(
+                body.request_id,
+                body.base_forecast_id,
+                body.author,
+                body.created_on or date.today(),
+            )
+        except ScenarioNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ForecastNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ScenarioValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return scenario_service.scenario_view(run.scenario_id)
+
+    @app.get("/scenarios")
+    def list_scenarios(
+        commodity: str | None = Query(None), market: str | None = Query(None)
+    ) -> dict:
+        found = scenario_service.list_scenarios(commodity, market)
+        return {
+            "scenarios": [
+                {
+                    "scenario_id": s.scenario_id,
+                    "request_id": s.request_id,
+                    "base_forecast_id": s.base_forecast_id,
+                    "fork_forecast_id": s.fork_forecast_id,
+                    "commodity": s.commodity,
+                    "market": s.market,
+                    "as_of": s.as_of.isoformat(),
+                    "author": s.author,
+                    "status": s.status,
+                    "view_kind": ScenarioService._VIEW_KINDS[s.status],
+                }
+                for s in found
+            ]
+        }
+
+    @app.get("/scenarios/adopted/{commodity}/{market}")
+    def get_adopted_view(commodity: str, market: str) -> dict:
+        return scenario_service.adopted_view(commodity, market)
+
+    @app.get("/scenarios/{scenario_id}")
+    def get_scenario(scenario_id: str) -> dict:
+        try:
+            return scenario_service.scenario_view(scenario_id)
+        except ScenarioNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ForecastNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/scenarios/{scenario_id}/diff")
+    def get_scenario_diff(scenario_id: str) -> dict:
+        try:
+            return scenario_service.diff(scenario_id).model_dump(mode="json")
+        except ScenarioNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ForecastNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ScenarioValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/scenarios/{scenario_id}/verify")
+    def verify_scenario_endpoint(scenario_id: str) -> dict:
+        try:
+            problems = scenario_service.verify_stored(scenario_id)
+        except ScenarioNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ForecastNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"scenario_id": scenario_id, "problems": problems}
+
+    @app.post("/scenarios/{scenario_id}/adopt")
+    def adopt_scenario(scenario_id: str, body: AdoptScenarioRequest) -> dict:
+        try:
+            adoption = scenario_service.adopt(
+                scenario_id,
+                body.adopter,
+                body.role,
+                body.decided_on or date.today(),
+            )
+        except ScenarioNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except AdoptionValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except AdoptionStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return adoption.model_dump(mode="json")
+
+    @app.get("/scenarios/{scenario_id}/adoption")
+    def get_scenario_adoption(scenario_id: str) -> dict:
+        try:
+            adoption = scenario_service.get_adoption(scenario_id)
+        except ScenarioNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if adoption is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"scenario {scenario_id} has no adoption act",
+            )
+        return adoption.model_dump(mode="json")
 
     # -- sentiment (R4, Law 3) ------------------------------------------
 
