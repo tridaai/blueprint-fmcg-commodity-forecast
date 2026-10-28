@@ -15,7 +15,13 @@ from datetime import date
 from pathlib import Path
 from typing import Protocol
 
-from fmcg_forecast.forecast.models import Commentary, Forecast, ForecastApproval
+from fmcg_forecast.forecast.models import (
+    AccuracyRecord,
+    BacktestResult,
+    Commentary,
+    Forecast,
+    ForecastApproval,
+)
 from fmcg_forecast.migrations import apply_migrations
 from fmcg_forecast.models import EventRecord, Manifest, Observation
 
@@ -50,6 +56,22 @@ class Store(Protocol):
     def get_approval(self, forecast_id: str) -> ForecastApproval | None: ...
     def save_commentary(self, commentary: Commentary) -> None: ...
     def get_commentary(self, forecast_id: str) -> Commentary | None: ...
+    # -- backtest results + accuracy ledger (R3) -----------------------
+    def insert_backtest_result(self, result: BacktestResult) -> None: ...
+    def get_backtest_result(self, result_id: str) -> BacktestResult | None: ...
+    def list_backtest_results(
+        self,
+        commodity: str | None = None,
+        market: str | None = None,
+        horizon_days: int | None = None,
+    ) -> list[BacktestResult]: ...
+    def save_accuracy_record(self, record: AccuracyRecord) -> None: ...
+    def get_accuracy_record(
+        self, commodity: str, market: str, horizon_days: int
+    ) -> AccuracyRecord | None: ...
+    def list_accuracy_records(
+        self, commodity: str | None = None, market: str | None = None
+    ) -> list[AccuracyRecord]: ...
     def close(self) -> None: ...
 
 
@@ -339,6 +361,124 @@ class SqlStore:
         )
         row = cur.fetchone()
         return Commentary.model_validate(json.loads(row[0])) if row else None
+
+    # -- backtest results + accuracy ledger (R3) -----------------------
+    # Results are insert-only, like forecasts: the harness checks for
+    # an existing content address before inserting, so a re-run is a
+    # no-op rather than a duplicate-write error. The ledger holds one
+    # CURRENT record per (series, horizon); saving replaces it,
+    # because a rebuild is a re-performance over a possibly larger
+    # result set — the record's content address is what changes.
+
+    def insert_backtest_result(self, result: BacktestResult) -> None:
+        sql = self._q(
+            "INSERT INTO backtest_results (result_id, commodity, market, "
+            "origin, horizon_days, forecast_id, payload) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                result.result_id,
+                result.commodity,
+                result.market,
+                self._date_param(result.origin),
+                result.horizon_days,
+                result.forecast_id,
+                result.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_backtest_result(self, result_id: str) -> BacktestResult | None:
+        cur = self._conn.execute(
+            self._q("SELECT payload FROM backtest_results WHERE result_id = ?"),
+            (result_id,),
+        )
+        row = cur.fetchone()
+        return BacktestResult.model_validate(json.loads(row[0])) if row else None
+
+    def list_backtest_results(
+        self,
+        commodity: str | None = None,
+        market: str | None = None,
+        horizon_days: int | None = None,
+    ) -> list[BacktestResult]:
+        sql = "SELECT payload FROM backtest_results"
+        params: list = []
+        clauses = []
+        if commodity is not None:
+            clauses.append("commodity = ?")
+            params.append(commodity)
+        if market is not None:
+            clauses.append("market = ?")
+            params.append(market)
+        if horizon_days is not None:
+            clauses.append("horizon_days = ?")
+            params.append(horizon_days)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY commodity, market, horizon_days, origin"
+        cur = self._conn.execute(self._q(sql), params)
+        return [BacktestResult.model_validate(json.loads(r[0])) for r in cur.fetchall()]
+
+    def save_accuracy_record(self, record: AccuracyRecord) -> None:
+        if self.dialect == "postgres":
+            sql = (
+                "INSERT INTO accuracy_records (commodity, market, horizon_days, "
+                "record_id, payload) VALUES (%s, %s, %s, %s, %s) "
+                "ON CONFLICT (commodity, market, horizon_days) DO UPDATE "
+                "SET record_id = EXCLUDED.record_id, payload = EXCLUDED.payload"
+            )
+        else:
+            sql = (
+                "INSERT OR REPLACE INTO accuracy_records (commodity, market, "
+                "horizon_days, record_id, payload) VALUES (?, ?, ?, ?, ?)"
+            )
+        self._conn.execute(
+            sql,
+            (
+                record.commodity,
+                record.market,
+                record.horizon_days,
+                record.record_id,
+                record.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_accuracy_record(
+        self, commodity: str, market: str, horizon_days: int
+    ) -> AccuracyRecord | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM accuracy_records WHERE commodity = ? "
+                "AND market = ? AND horizon_days = ?"
+            ),
+            (commodity, market, horizon_days),
+        )
+        row = cur.fetchone()
+        return AccuracyRecord.model_validate(json.loads(row[0])) if row else None
+
+    def list_accuracy_records(
+        self, commodity: str | None = None, market: str | None = None
+    ) -> list[AccuracyRecord]:
+        sql = "SELECT payload FROM accuracy_records"
+        params: list = []
+        clauses = []
+        if commodity is not None:
+            clauses.append("commodity = ?")
+            params.append(commodity)
+        if market is not None:
+            clauses.append("market = ?")
+            params.append(market)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY commodity, market, horizon_days"
+        cur = self._conn.execute(self._q(sql), params)
+        return [AccuracyRecord.model_validate(json.loads(r[0])) for r in cur.fetchall()]
 
     def close(self) -> None:
         self._conn.close()

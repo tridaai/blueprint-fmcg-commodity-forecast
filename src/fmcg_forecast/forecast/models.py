@@ -1,4 +1,4 @@
-"""Forecast artefacts (R2).
+"""Forecast artefacts (R2) and accuracy artefacts (R3).
 
 A *forecast* is a stored, content-addressed artefact: its id hashes
 the full decomposition, so any later edit to a line, a total or a
@@ -9,6 +9,13 @@ recorded approval act, and the store keeps it in its own column.
 
 Every figure in here is computed by the engine in code (Law 1). The
 model port only ever sees these artefacts, never the raw series.
+
+R3 adds the Law 2 artefacts: a *backtest result* (one origin, one
+horizon, the scored forecast path against the realised path), an
+*accuracy record* (the ledger's pooled aggregation over a stated
+window of results), and the *accuracy attachment* a forecast carries
+— a pinned, self-contained snapshot of the ledger records for its
+series at the moment it was run.
 """
 
 from __future__ import annotations
@@ -137,6 +144,54 @@ class ForecastMethod(BaseModel):
     )
 
 
+class HorizonAccuracy(BaseModel):
+    """One horizon's slice of a forecast's accuracy attachment."""
+
+    horizon_days: int
+    state: Literal["measured", "degraded", "unmeasured"] = Field(
+        description="degraded when the ledger record's MAPE exceeds the "
+        "accuracy pack's stated threshold; unmeasured when the series "
+        "has no backtest coverage at this horizon yet"
+    )
+    record_id: str | None = Field(
+        description="The accuracy record this slice was pinned from "
+        "(None when unmeasured)"
+    )
+    n_origins: int = Field(description="Backtest origins behind the record")
+    mae: float | None = Field(description="Pooled MAE, INR/quintal")
+    mape: float | None = Field(description="Pooled MAPE, percent")
+    bias: float | None = Field(
+        description="Pooled mean error (realised - forecast), INR/quintal"
+    )
+    coverage: float | None = Field(
+        description="Share of realised days inside the P10-P90 band"
+    )
+
+
+class AccuracyAttachment(BaseModel):
+    """The measured accuracy a forecast carries (Law 2).
+
+    A pinned snapshot: the ledger records for this forecast's series
+    at run time, copied onto the artefact so the forecast of record
+    keeps the accuracy it was judged by even after the ledger moves
+    on. There is no view of a forecast without this attachment's
+    state — a caller cannot ask for the flag to be left off.
+    """
+
+    state: Literal["measured", "degraded", "unmeasured"] = Field(
+        description="degraded when ANY horizon is degraded; unmeasured "
+        "when NO horizon has backtest coverage; measured otherwise"
+    )
+    pack_version: str | None = Field(
+        description="Accuracy pack version the records were built under"
+    )
+    per_horizon: list[HorizonAccuracy]
+    note: str = Field(
+        description="Why the state is what it is, in one stated sentence "
+        "— an unmeasured series names its missing coverage here"
+    )
+
+
 class Forecast(BaseModel):
     forecast_id: str
     commodity: str
@@ -152,6 +207,92 @@ class Forecast(BaseModel):
         default_factory=list,
         description="Drivers this commodity does not report — named gaps "
         "(Law 7), never silently treated as zero-effect",
+    )
+    accuracy: AccuracyAttachment | None = Field(
+        default=None,
+        description="Measured backtest accuracy pinned at run time "
+        "(Law 2, R3). Attached by the forecast service on the run "
+        "path; raw engine runs carry None — the engine estimates, "
+        "the service judges.",
+    )
+
+
+class BacktestDay(BaseModel):
+    """One scored day of a backtest: forecast band vs what happened."""
+
+    forecast_date: date
+    p10: float
+    p50: float
+    p90: float
+    realised: float = Field(description="Observed modal price that day, INR/quintal")
+
+
+class BacktestResult(BaseModel):
+    """One rolling-origin backtest: one series, one origin, one horizon.
+
+    The scored days are the days in (origin, origin + horizon] that
+    carry a realised observation — markets rest on Sundays, and a
+    day with no observation is not scored, never zero-filled. The
+    sums are the primitive record; the derived metrics are computed
+    from them by the stated formulas in backtest/metrics.py, so a
+    verifier can re-perform every figure from this artefact alone.
+    """
+
+    result_id: str
+    commodity: str
+    market: str
+    origin: date = Field(description="The as_of the engine estimated at")
+    horizon_days: int
+    forecast_id: str = Field(
+        description="Content address of the engine run at this origin "
+        "(provenance; backtest runs are harness artefacts, re-performable "
+        "from series + origin, and are not entered in the desk's "
+        "forecast record)"
+    )
+    engine_version: str
+    pack_version: str
+    days: list[BacktestDay]
+    n_days: int
+    covered_days: int = Field(description="Scored days with p10 <= realised <= p90")
+    sum_err: float = Field(description="Sum of (realised - p50) over scored days")
+    sum_abs_err: float
+    sum_abs_pct: float = Field(description="Sum of |realised - p50| / realised")
+    mae: float = Field(description="sum_abs_err / n_days, INR/quintal")
+    mape: float = Field(description="100 * sum_abs_pct / n_days, percent")
+    bias: float = Field(description="sum_err / n_days, INR/quintal")
+    coverage: float = Field(description="covered_days / n_days")
+
+
+class AccuracyRecord(BaseModel):
+    """The accuracy ledger's current record for one series x horizon.
+
+    Aggregated by the stated rule: pool the error sums of the most
+    recent ``ledger_window_origins`` backtest results (by origin) and
+    derive the metrics from the pooled sums — day-weighted, so a
+    long-horizon origin counts for its scored days, not as one vote.
+    ``degraded`` is stamped here, at ledger build time, against the
+    accuracy pack's threshold; forecasts copy it, they never
+    re-judge it.
+    """
+
+    record_id: str
+    commodity: str
+    market: str
+    horizon_days: int
+    origins: list[date] = Field(description="Origins pooled, ascending")
+    n_results: int
+    n_days: int
+    covered_days: int
+    mae: float
+    mape: float
+    bias: float
+    coverage: float
+    engine_version: str
+    pack_version: str
+    degraded_threshold_mape_pct: float
+    degraded: bool = Field(
+        description="mape > degraded_threshold_mape_pct, judged when "
+        "the ledger was built"
     )
 
 
