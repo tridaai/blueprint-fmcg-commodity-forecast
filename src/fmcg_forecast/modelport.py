@@ -35,6 +35,18 @@ class ModelPort(Protocol):
         """
         ...
 
+    def extract_sentiment(self, *, headline: str) -> dict:
+        """Read one headline into the pack's structured shape.
+
+        Returns the raw reading (status, score, direction,
+        strength, aspects, matched phrases, reason). The offline
+        profile performs the pack's stated lexicon rule; hosted
+        profiles produce the same schema through structured
+        outputs. Either way the caller wraps the reading in the
+        content-addressed artefact and the verifier disciplines it.
+        """
+        ...
+
 
 class OfflineModel:
     """Deterministic default: templated commentary from the figures."""
@@ -47,6 +59,13 @@ class OfflineModel:
             lines.append(f"{key}: {figures[key]}.")
         return " ".join(lines)
 
+    def extract_sentiment(self, *, headline: str) -> dict:
+        """The pack's stated lexicon rule, performed deterministically."""
+        from fmcg_forecast.sentiment.extract import extract_headline
+        from fmcg_forecast.sentiment.pack import load_sentiment_pack
+
+        return extract_headline(headline, load_sentiment_pack())
+
 
 class _HostedRefusal:
     """Base for hosted profiles: configured-or-refuse, no fake calls."""
@@ -57,6 +76,13 @@ class _HostedRefusal:
         self._detail = detail
 
     def draft_commentary(self, *, subject: str, figures: dict[str, str]) -> str:
+        raise ModelNotConfiguredError(
+            f"model profile '{self.profile_name}' is configured but its live "
+            f"client is not wired in this round ({self._detail}); refusing "
+            "rather than faking a model call"
+        )
+
+    def extract_sentiment(self, *, headline: str) -> dict:
         raise ModelNotConfiguredError(
             f"model profile '{self.profile_name}' is configured but its live "
             f"client is not wired in this round ({self._detail}); refusing "
