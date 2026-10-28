@@ -26,10 +26,10 @@
 | Truth store | `truth.py` | The sealed future path. Written once by the load path; read by graders and the eval gate. The forecast package is forbidden from importing it — enforced by an AST scan in the tests and the eval gate. |
 | Migrations | `migrations.py`, `migrations/{sqlite,postgres}/` | Numbered SQL files + a ledger table; idempotent runner shared by both stores. |
 | Ingest workflow | `workflow.py` | LangGraph graph: `generate → persist → verify`. Idempotent at the workflow level (same seed + digest verifies and stops); the store stays insert-only underneath. |
-| Model port | `modelport.py` | Language only (Law 1). Offline deterministic default; hosted profiles refuse loudly until configured. |
-| API | `api.py` | Read surfaces: `/series`, `/events`, `/manifest`, `/coverage/{commodity}`, `/catalogue`, `/health`, `/readiness`; forecast surface (R2): `/forecasts/run`, `/forecasts/{id}` + `/contributions`, `/verify`, `/approve`, `/approval`, `/commentary`; accuracy surface (R3): `/backtests/run`, `/backtests` + `/{id}`, `/accuracy`, `/accuracy/{commodity}/{market}/{horizon}`, `/forecasts/{id}/accuracy`. JSON logs + request id on every response. |
+| Model port | `modelport.py` | Language only (Law 1): commentary drafting and — R4 — sentiment extraction (`extract_sentiment`). Offline deterministic default (the pack's stated lexicon rule for extraction); hosted profiles refuse loudly until configured. |
+| API | `api.py` | Read surfaces: `/series`, `/events`, `/manifest`, `/coverage/{commodity}`, `/catalogue`, `/health`, `/readiness`; forecast surface (R2): `/forecasts/run`, `/forecasts/{id}` + `/contributions`, `/verify`, `/approve`, `/approval`, `/commentary`; accuracy surface (R3): `/backtests/run`, `/backtests` + `/{id}`, `/accuracy`, `/accuracy/{commodity}/{market}/{horizon}`, `/forecasts/{id}/accuracy`; sentiment surface (R4): `/sentiment/run`, `/sentiment/manifest`, `/sentiment/items` + `/{id}`, `/sentiment/extractions`, `/sentiment/index/{commodity}` + `/{week}`, `/sentiment/verify`, `/forecasts/{id}/sentiment`. JSON logs + request id on every response. |
 | Forecast package | `forecast/` | The engine (R2). Its `__init__` states the isolation law it is graded on: the package reads observations through the store port only, never the truth store. |
-| Forecast engine | `forecast/engine.py` | The stated method: OLS baseline (trend + day-of-year seasonality on log price); baseline residuals regressed on standardised driver inputs (arrivals = z(log arrivals), stock = z(level), trade = z(imports − exports), weather = raw); driver paths projected as last input × persistence^h; sequential (telescoping) attribution in the order arrivals → stock → trade → weather → events, so the decomposition sums to the total to the paisa; intervals from rolling 365-observation residual quantiles, AR-propagated and widened by the sparsity multiplier √(calendar/observed days). Refuses an `as_of` inside the sealed window unless invoked via the backtest path; refuses thin history (< 250 observations or < 730 days span) by naming it. |
+| Forecast engine | `forecast/engine.py` | The stated method: OLS baseline (trend + day-of-year seasonality on log price); baseline residuals regressed on standardised driver inputs (arrivals = z(log arrivals), stock = z(level), trade = z(imports − exports), weather = raw); driver paths projected as last input × persistence^h; sequential (telescoping) attribution in the order arrivals → stock → trade → weather → sentiment → events, so the decomposition sums to the total to the paisa; intervals from rolling 365-observation residual quantiles, AR-propagated and widened by the sparsity multiplier √(calendar/observed days). Refuses an `as_of` inside the sealed window unless invoked via the backtest path; refuses thin history (< 250 observations or < 730 days span) by naming it. R4: accepts a sentiment input (the weekly index carried daily, with the pack's estimation floors riding on it) — estimated like any other driver when the floors are met, a named zero `not_estimable` line (also named in `missing_drivers`) when they are not, and byte-identical pre-R4 behaviour when no input is supplied. |
 | Forecast verifier | `forecast/verify.py` | Re-performs a stored artefact: re-adds every day, checks line paths against day values, horizon summaries against day rows, interval ordering, and the content address. Any tamper fails here. |
 | Commentary | `forecast/commentary.py` | Builds the figure set from the artefact and verifies model drafts against it: every decimal figure in a draft must be an artefact figure, or the draft is refused wholesale. |
 | Forecast service | `forecast/service.py` | The one workflow every surface shares: idempotent runs (content-addressed artefacts), the draft → official approval act (named approver + role; placeholders and repeat approvals refused), figure-verified commentary drafting, and — R3 — pinning the accuracy ledger's current records onto each run as a self-contained snapshot whose state (measured / degraded / unmeasured) no read path can suppress. |
@@ -37,6 +37,12 @@
 | Backtest metrics | `backtest/metrics.py` | Pure computation: scored days (only days carrying a realised observation) summed per result — error, absolute error, absolute percentage, band coverage counted exactly — with MAE/MAPE/bias/coverage derived from the rounded sums by stated formulas; the ledger aggregation pools those sums over the window (day-weighted) and stamps `degraded`. |
 | Backtest harness | `backtest/harness.py` | Rolling-origin runs through the engine's `via_backtest` seam over observed history (never the truth store), storing content-addressed results idempotently and recording refused origins (coffee, before it can state the method) as named skips; then the ledger rebuild. `score_sealed_boundary` scores a boundary forecast against rows a grader hands in — the eval gate composes the sealed check from it. |
 | Backtest verifier | `backtest/verify.py` | Re-performs a stored result from its own scored days and a ledger record from the result artefacts of record; any tamper or drift fails. |
+| Sentiment pack | `sentiment/pack.py` | Law 3 as versioned data: the 27-phrase lexicon (phrase, aspect, polarity, weight — read from the buying desk's side of the price), the classification rule (direction ladder with no classified zero, strength formula), the index formula parameters (14-day trailing window, 7-day half-life), the forecast estimation floors (≥200 aligned days, ≥500-day span, ≤28-day recency) and the commentary claim vocabulary. Fail-closed loader; every extraction and index names its pack version. |
+| Sentiment corpus | `sentiment/corpus.py`, `sentiment/load.py`, `sentiment/grading.py` | The planted news/policy stream (583 items, deliberately uneven: rich for five commodities, 12 groundnut, 4 coffee) generated deterministically and loaded as a dataset artefact with a digest-stamped manifest. Each item's planted intent is written only to the grading store, whose table mirrors the truth store's isolation pattern: load path, tests and the eval gate may read it; the scoring modules may not — enforced by an AST scan. |
+| Extraction | `sentiment/extract.py` | The pack's stated lexicon rule performed offline: word-boundary matching, longest-first, non-overlapping; score = Σ polarity × weight; no matches or a zero score is `unclassified` with the reason — never forced. Wraps readings in the content-addressed `SentimentExtraction` artefact. |
+| Sentiment index | `sentiment/index.py` | Pure computation: per commodity × ISO week, the strength-weighted, age-decayed mean direction over the trailing window, with per-aspect sub-indices by the same rule. No classified item in the window → no index artefact at all (absent, never zero). |
+| Sentiment verifier | `sentiment/verify.py` | Re-performs every stored extraction (content address + the offline rule over the headline) and every stored index (recompute from the named extractions); and verifies commentary sentiment claims — a claim verifies only when the items it cites exist, belong to the forecast's commodity, are classified, and their strength-weighted aggregate supports the claimed direction word. |
+| Sentiment service | `sentiment/service.py` | The pipeline (extract all items idempotently — a stored artefact whose content address disagrees with a fresh computation is a conflict, never an overwrite — then compute every week's index), the reads, stored-artefact verification, and the forecast hand-off: the daily index series restricted to fully-ended weeks (no partial-week leakage) plus the strongest cited items behind the latest index, or `None` when a commodity has no corpus. |
 
 ## Data design
 
@@ -54,6 +60,15 @@
   latent process — same seasonality, trend and noise streams — so R3's
   backtests grade the engine against a future that behaves like the
   past it was built from, including no planted events in the window.
+- A **sentiment item** is (item id, commodity, date, generic source
+  label, headline) — data with provenance, insert-only. Its
+  **extraction** and the weekly **index** derived from extractions
+  are content-addressed artefacts (migration 0004); the item's
+  planted intent is a separate grading-side record the product
+  tables never join to. Sentiment items and the R5 event registry
+  are different artefacts and are never merged: an item is a
+  reading of the news stream, an event is a declared shock with a
+  stated transmission.
 
 ## The pipeline the rounds build
 
@@ -66,8 +81,13 @@ LangGraph state machine whose transitions are stored artefacts:
   forecast now pins the ledger's records for its series, degraded
   where the pooled MAPE crosses the pack's stated bar, unmeasured
   (named) where the harness has not covered the series yet.
-- **explain** (R4): sentiment as a scored pack with provenance;
-  commentary drafted by the model port around computed figures only.
+- **explain** (R4, landed): sentiment as a scored pack with
+  provenance — planted corpus, extraction through the model port,
+  the weekly index computed in code, the forecast line earned
+  against the pack's floors or named not-estimable, and commentary
+  drafted by the model port around computed figures only, with
+  sentiment directions admitted solely alongside the items whose
+  stored extractions support them.
 - **scenario** (R5–R6): declared events and bounded lever forks,
   pinned to their base forecast (Laws 4–5).
 - **publish** (R7+): dashboards assembled from artefacts only (Law 6),

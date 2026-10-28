@@ -178,6 +178,68 @@ and a frozen `constraints.txt` · multi-stage non-root Docker.
   `GET /forecasts/{id}/accuracy`; the demo runs the harness and
   prints the ledger; the HTTP harness checks the whole surface.
 
+## What Round 4 adds
+
+- **The sentiment corpus as data** — 583 planted news/policy items
+  across the seven commodities (migration 0004), each with a generic
+  source label, a date and a headline, loaded as a dataset artefact
+  with a digest-stamped manifest. The corpus is deliberately uneven,
+  like the real desk's feed: five commodities carry a rich weekly
+  stream, groundnut is sparse (12 items), coffee thinnest (4). What
+  each item was planted to *mean* — its intended direction and
+  clarity — is grading-side truth behind its own store; the scoring
+  code never reads it (an isolation scan enforces that, mirroring
+  the truth store's law).
+- **Extraction through the model port** — the offline profile
+  performs the **sentiment pack's** stated lexicon rule (27 phrases
+  across policy / supply / demand / weather / trade, read from the
+  buying desk's side of the price); hosted profiles produce the same
+  structured reading through structured outputs, fail-closed as
+  usual. Every reading is a content-addressed `SentimentExtraction`:
+  direction on the stated ladder (−1 / −0.5 / +0.5 / +1 — there is
+  no classified zero), strength by the stated formula, per-aspect
+  signed sums. An item the rule cannot classify is **unclassified
+  with the reason on record** — signalless, or signals cancelling —
+  never forced into a direction. Graded against the planted intent,
+  the extraction is exact on all 583 items: every clear item's
+  direction, strength, score and aspects, and every ambiguous or
+  signalless item landing unclassified.
+- **The weekly index, computed in code** — per commodity × ISO week,
+  the strength-weighted, age-decayed mean direction over the
+  trailing 14 days (half-life 7 days), with aspect sub-indices by
+  the same formula. A week whose window holds no classified item
+  has **no index — absent, never zero-filled**. Every stored index
+  re-performs exactly from the stored extractions.
+- **The forecast gains the driver — where it is earned** — the
+  engine treats the index as one more driver (estimated by the same
+  residual regression, future path = last index value at its
+  measured persistence) only when the pack's estimation floors are
+  met: ≥200 index-covered price days, spanning ≥500 calendar days,
+  the newest covered day within 28 days of the forecast date. Wheat,
+  basmati, soybean, chili and cumin clear the floors; groundnut and
+  coffee do not, and their forecasts carry a **named
+  `not_estimable` sentiment line** — zero contribution, the failing
+  floors stated, `sentiment_not_estimable` in `missing_drivers` —
+  the coffee pattern applied to sentiment. The decomposition
+  identity (baseline + lines = P50) holds exactly either way.
+- **Sentiment is cited, never asserted** — commentary may state a
+  sentiment direction only with the item ids behind it, and a claim
+  verifier checks the pairing against the stored extractions before
+  a draft may be stored: an uncited claim, a claim citing another
+  commodity's or an unclassified item, or a direction the cited
+  readings do not support refuses the whole commentary. The offline
+  drafter's reading sentence carries the strongest agreeing items
+  behind the latest index.
+- **Surfaces** — migration 0004 (items, extractions, indices,
+  corpus manifest, grading-side intent); `POST /sentiment/run`,
+  `GET /sentiment/manifest`, `GET /sentiment/items` (+ `/{id}` with
+  its extraction), `GET /sentiment/extractions`,
+  `GET /sentiment/index/{commodity}` (+ `/{week}`),
+  `GET /sentiment/verify`, `GET /forecasts/{id}/sentiment`; serve
+  loads the corpus and runs the pipeline at boot; the demo grades
+  the extraction against the intent and walks the estimated and
+  not-estimable lines; the HTTP harness checks the whole surface.
+
 ## Honest status
 
 - **Built and gated in R1:** the spine, generator + manifest, store port +
@@ -205,7 +267,19 @@ and a frozen `constraints.txt` · multi-stage non-root Docker.
   result/ledger re-performance, degraded-flag correctness and
   suppression, unmeasured naming and the sealed check; the truth
   isolation scan now covers the backtest package too.
-- **Not yet built:** the sentiment pack (R4), event/scenario handling
+- **Built and gated in R4:** the sentiment pack (lexicon, direction
+  ladder, index formula and estimation floors as versioned data), the
+  planted corpus (583 items; intent grading-side only, isolation-scanned),
+  extraction through the model port graded exact against the planted
+  intent on the whole corpus, the weekly index (absent-never-zero,
+  re-performable), the forecast sentiment line (estimated for the five
+  rich-corpus commodities; a named not-estimable line for groundnut and
+  coffee), claim-verified commentary citations, migration 0004,
+  sentiment API surfaces, demo + harness walks. Eval gate v4 adds
+  zero-tolerance counters for extraction-vs-intent, index
+  re-performance, per-commodity contribution state as planted, accepted
+  claim violations and intent isolation.
+- **Not yet built:** event/scenario handling
   (R5-R6), prompt-to-dashboard (R7), the console (R13). The round map runs
   to R20 and continues past it until the production bar is met.
 - **The dataset in this repo is generated in-repo for the blueprint** — gold
@@ -255,7 +329,17 @@ src/fmcg_forecast/
     metrics.py     scored-day sums, derived metrics, aggregation
     verify.py      re-performance of results and ledger records
     harness.py     rolling-origin runs + ledger rebuild
-migrations/        0001-0003 SQL, sqlite + postgres dialects
+  sentiment/       the sentiment package (intent-isolated, R4):
+    pack.py        the sentiment pack: lexicon, ladder, floors
+    models.py      item / extraction / index / corpus manifest
+    extract.py     the pack's lexicon rule, performed offline
+    index.py       the weekly index, computed in code
+    verify.py      re-performance + commentary claim verification
+    service.py     pipeline, forecast input, reads
+    corpus.py      the planted corpus (load/grading side only)
+    grading.py     the intent store (grading side only)
+    load.py        corpus load (idempotent, digest-checked)
+migrations/        0001-0004 SQL, sqlite + postgres dialects
 scripts/           demo.py, local_harness.py
 evals/             the eval gate
 docs/              architecture.md
