@@ -5,7 +5,10 @@ local port, and checks /health, /readiness, /manifest, /events and
 a /series read — the same contract a desk client would use. Round 4
 adds the sentiment surface: corpus manifest, items, the weekly
 index, a forecast's sentiment line (estimated for wheat, named
-not-estimable for groundnut).
+not-estimable for groundnut). Round 5 adds the event registry: the
+seeded planted shocks with their transmission verdicts, the
+drought's what-happened view, an analyst declaration over HTTP,
+and the declared event landing on a forecast as its own line.
 """
 
 from __future__ import annotations
@@ -202,6 +205,86 @@ def main() -> int:
             (
                 "the flag cannot be suppressed by a view parameter",
                 r.status_code == 200 and r.json()["accuracy"]["state"] == "degraded",
+            )
+        )
+        r = client.get(f"{BASE}/market-events")
+        seeded_events = r.json()["events"] if r.status_code == 200 else []
+        checks.append(
+            (
+                "event registry seeded with the three planted shocks",
+                r.status_code == 200 and len(seeded_events) == 3,
+            )
+        )
+        tariff_view = next(
+            (e for e in seeded_events if e["source_record_id"] == "EVT-2025-TARIFF-SOYBEAN"),
+            None,
+        )
+        checks.append(
+            (
+                "the planted tariff's transmission verifies on its face",
+                tariff_view is not None
+                and tariff_view["verification"]["status"] == "verified"
+                and tariff_view["verification"]["measured_ratio"] is not None
+                and 1.06 <= tariff_view["verification"]["measured_ratio"] <= 1.24,
+            )
+        )
+        drought_view = next(
+            (e for e in seeded_events if e["event_class"] == "weather_shock"),
+            None,
+        )
+        r = client.get(
+            f"{BASE}/market-events/{drought_view['event_id']}/impact",
+            params={"market": "guntur"},
+        )
+        checks.append(
+            (
+                "drought what-happened view is measured",
+                drought_view is not None
+                and r.status_code == 200
+                and r.json()["state"] == "measured"
+                and r.json()["mean_price_ratio"] > 1.0,
+            )
+        )
+        r = client.post(
+            f"{BASE}/market-events",
+            json={
+                "event_class": "logistics_disruption",
+                "commodity": "cumin",
+                "window_start": "2026-01-20",
+                "window_end": "2026-02-10",
+                "channel": "arrivals",
+                "peak_log_price_effect": 0.05,
+                "basis": "desk_estimate",
+                "basis_detail": "Desk estimate: the corridor disruption "
+                "thins arrivals at the reference market for three weeks",
+                "decay_days": 10,
+                "description": "Transport corridor disruption expected "
+                "to thin arrivals",
+                "declared_by": "a.sharma",
+                "declared_on": "2026-01-02",
+            },
+        )
+        declared_id = r.json()["event_id"] if r.status_code == 201 else None
+        checks.append(("event declaration accepted as an analyst act", declared_id is not None))
+        r = client.post(
+            f"{BASE}/forecasts/run", json={"commodity": "cumin", "market": "unjha"}
+        )
+        cumin_id = r.json()["forecast_id"] if r.status_code == 200 else None
+        r = client.get(f"{BASE}/forecasts/{cumin_id}/events")
+        checks.append(
+            (
+                "declared event lands on the forecast as its own line",
+                r.status_code == 200
+                and r.json()["state"] == "shocked"
+                and declared_id in r.json()["events_applied"]
+                and r.json()["interval_widening"] == 1.25,
+            )
+        )
+        r = client.get(f"{BASE}/forecasts/{cumin_id}/verify")
+        checks.append(
+            (
+                "shocked forecast verifies clean",
+                r.status_code == 200 and r.json()["problems"] == [],
             )
         )
         for name, ok in checks:

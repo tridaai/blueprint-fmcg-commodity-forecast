@@ -8,6 +8,7 @@ import uvicorn
 
 from fmcg_forecast.api import create_app
 from fmcg_forecast.config import Settings
+from fmcg_forecast.events.service import EventService
 from fmcg_forecast.logging_config import configure_logging
 from fmcg_forecast.modelport import build_model_port
 from fmcg_forecast.sentiment.grading import build_sentiment_grading_store
@@ -40,6 +41,10 @@ def main() -> None:
     model_port = build_model_port(settings)
     pipeline = SentimentService(store, model_port).run_pipeline()
     log.info("sentiment pipeline: %s", pipeline)
+    manifest = store.get_manifest()
+    if manifest is not None:
+        seeded = EventService(store).seed_historical(manifest)
+        log.info("market event registry: %s", seeded)
     app = create_app(store, model_port)
     uvicorn.run(app, host="0.0.0.0", port=settings.port)
 

@@ -11,9 +11,16 @@ the degraded flag rides on every forecast read; there is no
 parameter that takes it off. Round 4 adds the sentiment surface
 (Law 3): the corpus items, their extractions, the weekly index per
 commodity and week, the pipeline run, a re-performance read, and
-any forecast's sentiment line. Every response carries the request
-id the logging middleware assigned, so a figure on a desk screen
-can be traced to the exact stored rows behind it.
+any forecast's sentiment line. Round 5 adds the governed event
+registry (Law 4): declare an event (a named analyst act), seed the
+planted historical shocks from the manifest, read any event with
+its transmission verdict on its face, read the what-happened
+impact view, and read any forecast's per-event lines — the desk's
+forecasts now run with the registry wired in, so a declared event
+whose window touches a run lands as its own named line. Every
+response carries the request id the logging middleware assigned,
+so a figure on a desk screen can be traced to the exact stored
+rows behind it.
 """
 
 from __future__ import annotations
@@ -28,6 +35,11 @@ from pydantic import BaseModel
 from fmcg_forecast.backtest.harness import run_all as run_backtest_harness
 from fmcg_forecast.backtest.pack import load_accuracy_pack
 from fmcg_forecast.catalogue import COMMODITIES
+from fmcg_forecast.events.service import (
+    EventNotFoundError,
+    EventService,
+    EventValidationError,
+)
 from fmcg_forecast.forecast.engine import (
     ForecastError,
     InsufficientHistoryError,
@@ -69,21 +81,39 @@ class BacktestRunRequest(BaseModel):
     pack_version: str | None = None
 
 
+class RegisterEventRequest(BaseModel):
+    event_class: str
+    commodity: str
+    window_start: date
+    window_end: date | None = None
+    channel: str
+    driver_effect: float | None = None
+    peak_log_price_effect: float
+    basis: str
+    basis_detail: str
+    decay_days: int
+    description: str
+    declared_by: str
+    declared_on: date | None = None
+
+
 def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     model_port = model or OfflineModel()
     sentiment = SentimentService(store, model_port)
+    event_service = EventService(store)
     service = ForecastService(
         store,
         model_port,
         sentiment_provider=sentiment.forecast_input,
         sentiment_claim_verifier=sentiment.verify_claims,
+        events_provider=event_service.forecast_adjustments,
     )
     app = FastAPI(
         title="FMCG Commodity Forecast — Operations API",
-        version="0.4.0",
+        version="0.5.0",
         description="Read surfaces for the commodity price & driver store, "
         "the governed forecast surface, the backtest/accuracy surface, "
-        "and the sentiment surface.",
+        "the sentiment surface, and the event registry.",
     )
 
     @app.middleware("http")
@@ -313,6 +343,78 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
             return service.sentiment_view(forecast_id)
         except ForecastNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/forecasts/{forecast_id}/events")
+    def get_forecast_events(forecast_id: str) -> dict:
+        try:
+            return service.events_view(forecast_id)
+        except ForecastNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    # -- the governed event registry (R5, Law 4) -----------------------
+
+    @app.post("/market-events", status_code=201)
+    def register_market_event(body: RegisterEventRequest) -> dict:
+        try:
+            event = event_service.register_event(
+                event_class=body.event_class,
+                commodity=body.commodity,
+                window_start=body.window_start,
+                window_end=body.window_end,
+                channel=body.channel,
+                driver_effect=body.driver_effect,
+                peak_log_price_effect=body.peak_log_price_effect,
+                basis=body.basis,
+                basis_detail=body.basis_detail,
+                decay_days=body.decay_days,
+                description=body.description,
+                declared_by=body.declared_by,
+                declared_on=body.declared_on or date.today(),
+            )
+        except EventValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return event_service.event_view(event.event_id)
+
+    @app.post("/market-events/seed-historical")
+    def seed_historical_events() -> dict:
+        found = store.get_manifest()
+        if found is None:
+            raise HTTPException(status_code=404, detail="dataset not loaded")
+        return event_service.seed_historical(found)
+
+    @app.get("/market-events/verify")
+    def verify_market_events() -> dict:
+        return event_service.verify_registry()
+
+    @app.get("/market-events")
+    def list_market_events(commodity: str | None = Query(None)) -> dict:
+        found = event_service.list_events(commodity)
+        return {"events": [event_service.event_view(e.event_id) for e in found]}
+
+    @app.get("/market-events/{event_id}")
+    def get_market_event(event_id: str) -> dict:
+        try:
+            return event_service.event_view(event_id)
+        except EventNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/market-events/{event_id}/verify")
+    def verify_market_event(event_id: str) -> dict:
+        try:
+            return event_service.verify_event(event_id).model_dump(mode="json")
+        except EventNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/market-events/{event_id}/impact")
+    def get_market_event_impact(
+        event_id: str, market: str | None = Query(None)
+    ) -> dict:
+        try:
+            return event_service.impact(event_id, market).model_dump(mode="json")
+        except EventNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except EventValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     # -- sentiment (R4, Law 3) ------------------------------------------
 

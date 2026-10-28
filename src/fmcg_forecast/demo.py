@@ -170,6 +170,74 @@ def main() -> int:
     stored = sentiment.verify_stored()
     print(f"  re-performance of every stored extraction and index: "
           f"{len(stored['problems'])} problems")
+
+    print("\n--- event registry (R5, Law 4): declared shocks, measured claims, separate lines ---")
+    from fmcg_forecast.events.service import EventService
+
+    events = EventService(store)
+    seeded = events.seed_historical(manifest)
+    print(f"historical seeding from the manifest: {len(seeded['seeded'])} planted "
+          f"shocks registered ({seeded['total_on_record']} on record)")
+    for event in events.list_events():
+        verdict = events.verify_event(event.event_id)
+        print(f"  {event.event_class:<19} {event.commodity:<13} "
+              f"{event.window_start}..{event.window_end} claimed "
+              f"{event.transmission.peak_log_price_effect:+.3f} log via "
+              f"{event.transmission.channel} -> {verdict.status}"
+              + (f" (measured x{verdict.measured_ratio:.3f})"
+                 if verdict.measured_ratio is not None else ""))
+    tariff_event = next(
+        e for e in events.list_events() if e.source_record_id == "EVT-2025-TARIFF-SOYBEAN"
+    )
+    impact = events.impact(tariff_event.event_id, "indore")
+    print(f"  what-happened view, tariff at indore: {len(impact.days)} observed "
+          f"days against the no-event baseline; mean effect "
+          f"x{impact.mean_price_ratio:.3f}, peak log effect "
+          f"{impact.peak_log_effect:+.3f}")
+
+    wired = ForecastService(
+        store,
+        build_model_port(settings),
+        sentiment_provider=sentiment.forecast_input,
+        sentiment_claim_verifier=sentiment.verify_claims,
+        events_provider=events.forecast_adjustments,
+    )
+    clear = wired.run_forecast("soybean", "indore")
+    clear_view = wired.events_view(clear.forecast_id)
+    print(f"soybean/indore forecast {clear.forecast_id} before any live "
+          f"declaration: events state '{clear_view['state']}' (the 2025 "
+          "tariff's window and decay tail end months before this run)")
+    declared = events.register_event(
+        event_class="tariff_change",
+        commodity="soybean",
+        window_start=date(2026, 2, 1),
+        window_end=date(2026, 2, 28),
+        channel="import_flow",
+        peak_log_price_effect=0.08,
+        basis="announced_measure",
+        basis_detail="Import duty on oilseeds raised by 10 percentage "
+                     "points in a ministry notification; the peak is "
+                     "the announced measure's import-parity effect as "
+                     "stated by the desk",
+        decay_days=20,
+        description="Import tariff increase on oilseeds announced for "
+                    "February; domestic prices expected to step up "
+                    "through import parity",
+        declared_by="a.sharma",
+        declared_on=date(2026, 1, 2),
+    )
+    shocked = wired.run_forecast("soybean", "indore")
+    shocked_view = wired.events_view(shocked.forecast_id)
+    entry = shocked_view["events"][0]
+    print(f"declared {declared.event_id} (tariff_change, +0.08 log, "
+          f"Feb 2026) -> forecast {shocked.forecast_id} is "
+          f"'{shocked_view['state']}': the event is its own line "
+          f"(peak daily contribution "
+          f"{max(entry['contribution_path_inr']):+.2f} INR, intervals "
+          f"widened x{shocked_view['interval_widening']} on shocked days)")
+    problems = wired.verify_stored(shocked.forecast_id)
+    print(f"  re-performance of the shocked artefact (decomposition + "
+          f"per-event lines): {len(problems)} problems")
     print(f"sealed truth rows stored: {truth_store.count()} (readable only via the truth store)")
     return 0
 

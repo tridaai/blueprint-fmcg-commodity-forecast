@@ -236,7 +236,9 @@ class EventService:
             record(event)
 
         for anomaly in manifest.weather_anomalies:
-            peak = round(-_GENERATOR_WEATHER_COEF * anomaly.depth, 4)
+            # The generator's price term is coef x weather deviation:
+            # (-0.06) x (-0.6) = +0.036 — a drought firms prices.
+            peak = round(_GENERATOR_WEATHER_COEF * anomaly.depth, 4)
             event = MarketEvent(
                 event_id="EVT-pending",
                 event_class="weather_shock",
