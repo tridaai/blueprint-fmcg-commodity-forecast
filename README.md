@@ -308,6 +308,77 @@ and a frozen `constraints.txt` · multi-stage non-root Docker.
   and then declares a new February tariff and re-forecasts with
   and without it; the HTTP harness checks the whole surface.
 
+## What Round 6 adds
+
+- **The bounded lever catalogue** — a scenario may move only what
+  the **scenario pack** (versioned data) states: arrivals shift
+  (±40% of the level), stock-cover change (±30 days), trade-flow
+  shift (±60%), weather-index deviation (±0.5), a sentiment index
+  override (within [−1, 1], and only where the base's sentiment
+  line is estimated), a declared event from the registry, an
+  extension of an event the base already applies (≤ 90 days), or
+  a hypothetical event of an event-pack class with a stated
+  transmission (peak within ±35%). A request outside a bound is
+  refused with the bound named — the catalogue is the desk's
+  whole vocabulary, never a suggestion.
+- **Plain-language intake, shown back verbatim** — a typed
+  what-if ("what if arrivals drop 10% and the tariff stays
+  another month?") goes through the model port: offline, the
+  pack's stated deterministic grammar; hosted, the same lever
+  schema via structured outputs, failing closed. The result is a
+  content-addressed `ScenarioRequest` artefact carrying the exact
+  clauses and the levers they became. A clause the catalogue
+  cannot state is refused with the clause named — never silently
+  reinterpreted, never improvised.
+- **Pinned forks through the same machinery** — a `ScenarioRun`
+  pins (base forecast, request, author). The fork is a fresh
+  engine run on the base's own estimation with the levers applied
+  to the driver **input paths** — a level shift becomes a
+  log-standard-deviation shift by the pack's stated conversion
+  (arrivals −10% becomes ln(0.9)/sd(log arrivals) on the arrivals
+  path; stock cover ±N days becomes N/sd(stock level); the
+  sentiment override replaces the sentiment path's start). The
+  baseline is shared, the decomposition identity holds on the
+  fork exactly, and the fork's accuracy attachment is the
+  ledger's, like any desk run. The fork lives on the run; it is
+  never inserted into the desk's forecast record, and the base
+  artefact is never mutated — the eval gate compares its stored
+  payload byte-for-byte before and after all scenario activity.
+  Scenario events (an extension, a hypothetical) are
+  scenario-local artefacts in the events slot; the registry is
+  never written by a scenario.
+- **An exact diff** — base vs fork, per driver per day, computed
+  in integer paise: the per-driver differences plus the events
+  difference re-add to the P50 difference on every day, and the
+  view reports driver totals and the P50 difference at 7/30/90
+  days. Telescoping shows honestly: moving arrivals also moves
+  the stock and weather lines' attributed shares, and the diff
+  shows those too.
+- **The adoption gate** — a scenario becomes the desk's adopted
+  view for its series only by a named adopter's act with a named
+  role (placeholders refused, as at the approval gate). Adoption
+  supersedes the series' previously adopted scenario by link;
+  adopting an adopted or superseded scenario is a state error.
+  Every read is labelled: the base forecast is the desk's
+  forecast, an unadopted scenario reads `scenario_draft`,
+  the adopted one `adopted_scenario`, a superseded one
+  `superseded_scenario` — a draft can be shared, but no read
+  dresses it up as the desk's view.
+- **Surfaces** — migration 0006 (both dialects); `GET
+  /scenarios/pack`, `POST /scenarios/requests` (typed intake),
+  `POST /scenarios/requests/structured`, `POST /scenarios`
+  (run), `GET /scenarios/{id}`, `GET /scenarios/{id}/diff`,
+  `GET /scenarios/{id}/verify`, `POST /scenarios/{id}/adopt`,
+  `GET /scenarios/adopted/{commodity}/{market}`; the
+  `fmcg-agent-scenarios` CLI with the same verbs (parse, create,
+  run, show, diff, verify, adopt, adopted); the demo walks the
+  typed what-if from parse to adoption; the HTTP harness checks
+  the surface end to end. What the studio still cannot do: a
+  lever outside the catalogue, a scenario on a series whose
+  named gaps leave a lever nothing to move (coffee's stock
+  lever is refused, naming the missing line), and adoption by
+  anyone but a named human act.
+
 ## Honest status
 
 - **Built and gated in R1:** the spine, generator + manifest, store port +
@@ -362,9 +433,22 @@ and a frozen `constraints.txt` · multi-stage non-root Docker.
   mapping, transmission verification, the hand-computed fixture
   line, widening, registration refusals and the impact view; the
   truth-isolation scan now covers the events package too.
-- **Not yet built:** scenario forks
-  (R6), prompt-to-dashboard (R7), the console (R13). The round map runs
-  to R20 and continues past it until the production bar is met.
+- **Built and gated in R6:** the scenario pack (the bounded lever
+  catalogue, stated conversions and grammar as versioned data),
+  the deterministic grammar with named-clause refusals, pinned
+  forks through the engine's shift slot (identity intact, base
+  artefact byte-identical after all scenario activity), the
+  integer-paise diff, scenario-local events (extensions and
+  hypotheticals; the registry untouched), the adoption gate with
+  supersession by link and labelled reads, migration 0006,
+  scenario API + CLI surfaces, demo + harness walks. Eval gate
+  v6 adds zero-tolerance counters for parse fixtures, lever
+  bounds, fork pinning, diff sums, scenario-event locality and
+  adoption discipline; the truth-isolation scan now covers the
+  scenarios package too.
+- **Not yet built:** prompt-to-dashboard (R7), the console (R13).
+  The round map runs to R20 and continues past it until the
+  production bar is met.
 - **The dataset in this repo is generated in-repo for the blueprint** — gold
   by construction, so the engine can be graded against a known future.
 - **Live models are stub-tested until configured:** hosted profiles fail
@@ -429,7 +513,17 @@ src/fmcg_forecast/
     measure.py     transmission measurement + the impact view
     verify.py      re-performance of stored declarations
     service.py     declare / seed / verify / forecast provider
-migrations/        0001-0005 SQL, sqlite + postgres dialects
+  scenarios/       the scenario studio package (truth-isolated, R6):
+    pack.py        the scenario pack: lever catalogue, bounds,
+                   conversions, the stated grammar
+    models.py      request / run / adoption / diff artefacts
+    parse.py       the deterministic grammar, performed offline
+    shifts.py      lever values -> driver-input shifts, in code
+    diff.py        the integer-paise fork-vs-base diff
+    verify.py      re-performance of stored runs
+    service.py     parse / fork / diff / adopt — one workflow
+    cli.py         the fmcg-agent-scenarios command line
+migrations/        0001-0006 SQL, sqlite + postgres dialects
 scripts/           demo.py, local_harness.py
 evals/             the eval gate
 docs/              architecture.md
