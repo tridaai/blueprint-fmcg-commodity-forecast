@@ -10,7 +10,14 @@ Every surface (API, CLI/demo) shares this service. Its rules:
   named role (placeholder names are refused);
 - commentary is drafted by the model port and stored only if every
   figure in it verifies against the artefact — a bad draft is
-  refused wholesale and nothing is stored.
+  refused wholesale and nothing is stored;
+- every run carries its measured accuracy (Law 2, R3): before the
+  artefact is stored, the service pins the accuracy ledger's
+  current records for its series onto it as a snapshot — degraded
+  where the ledger stamps degraded, unmeasured (named, never
+  blank) where the harness has not covered the series yet. The
+  snapshot is part of the content address, and no read path offers
+  a view without it.
 """
 
 from __future__ import annotations
@@ -23,8 +30,20 @@ from fmcg_forecast.forecast.commentary import (
     commentary_subject,
     verify_commentary,
 )
-from fmcg_forecast.forecast.engine import EventAdjustment, ForecastError, run_engine
-from fmcg_forecast.forecast.models import Commentary, Forecast, ForecastApproval
+from fmcg_forecast.forecast.engine import (
+    EventAdjustment,
+    ForecastError,
+    forecast_content_id,
+    run_engine,
+)
+from fmcg_forecast.forecast.models import (
+    HORIZONS,
+    AccuracyAttachment,
+    Commentary,
+    Forecast,
+    ForecastApproval,
+    HorizonAccuracy,
+)
 from fmcg_forecast.forecast.verify import verify_forecast
 from fmcg_forecast.modelport import ModelPort
 
@@ -91,11 +110,107 @@ class ForecastService:
             via_backtest=via_backtest,
             event_adjustments=event_adjustments,
         )
+        forecast = self._attach_accuracy(forecast)
         existing = self.store.get_forecast(forecast.forecast_id)
         if existing is not None:
             return existing
         self.store.insert_forecast(forecast)
         return forecast
+
+    def _attach_accuracy(self, forecast: Forecast) -> Forecast:
+        """Pin the ledger's current records for this series (Law 2).
+
+        The degraded judgement is the ledger's — stamped on the
+        record when it was built — copied here, never re-judged and
+        never suppressible: every read of the forecast carries this
+        attachment, including the state.
+        """
+        per_horizon: list[HorizonAccuracy] = []
+        pack_version: str | None = None
+        threshold: float | None = None
+        for horizon in HORIZONS:
+            record = self.store.get_accuracy_record(
+                forecast.commodity, forecast.market, horizon
+            )
+            if record is None:
+                per_horizon.append(
+                    HorizonAccuracy(
+                        horizon_days=horizon,
+                        state="unmeasured",
+                        record_id=None,
+                        n_origins=0,
+                        mae=None,
+                        mape=None,
+                        bias=None,
+                        coverage=None,
+                    )
+                )
+                continue
+            pack_version = record.pack_version
+            threshold = record.degraded_threshold_mape_pct
+            per_horizon.append(
+                HorizonAccuracy(
+                    horizon_days=horizon,
+                    state="degraded" if record.degraded else "measured",
+                    record_id=record.record_id,
+                    n_origins=record.n_results,
+                    mae=record.mae,
+                    mape=record.mape,
+                    bias=record.bias,
+                    coverage=record.coverage,
+                )
+            )
+        degraded_at = [s.horizon_days for s in per_horizon if s.state == "degraded"]
+        measured_at = [s.horizon_days for s in per_horizon if s.state != "unmeasured"]
+        unmeasured_at = [s.horizon_days for s in per_horizon if s.state == "unmeasured"]
+        if degraded_at:
+            state = "degraded"
+            horizons = "/".join(str(h) for h in degraded_at)
+            note = (
+                f"degraded at the {horizons}-day horizon(s): pooled "
+                f"backtest MAPE above the accuracy pack's stated "
+                f"{threshold}% bar (pack {pack_version}) — flagged on the "
+                "forecast, never hidden"
+            )
+        elif not measured_at:
+            state = "unmeasured"
+            note = (
+                "accuracy unmeasured: the backtest harness has not "
+                "covered this series yet — no figure here claims a "
+                "measured accuracy"
+            )
+        else:
+            state = "measured"
+            note = (
+                f"measured over the accuracy ledger's most recent "
+                f"backtest origins (pack {pack_version})"
+            )
+            if unmeasured_at:
+                horizons = "/".join(str(h) for h in unmeasured_at)
+                note += f"; no backtest coverage at the {horizons}-day horizon(s) yet"
+        forecast.accuracy = AccuracyAttachment(
+            state=state,  # type: ignore[arg-type]
+            pack_version=pack_version,
+            per_horizon=per_horizon,
+            note=note,
+        )
+        forecast.forecast_id = forecast_content_id(forecast)
+        return forecast
+
+    def accuracy_view(self, forecast_id: str) -> dict:
+        """The forecast's pinned accuracy snapshot, as its own read."""
+        forecast = self.get_forecast(forecast_id)
+        return {
+            "forecast_id": forecast.forecast_id,
+            "commodity": forecast.commodity,
+            "market": forecast.market,
+            "as_of": forecast.as_of.isoformat(),
+            "accuracy": (
+                forecast.accuracy.model_dump(mode="json")
+                if forecast.accuracy is not None
+                else None
+            ),
+        }
 
     def get_forecast(self, forecast_id: str) -> Forecast:
         forecast = self.store.get_forecast(forecast_id)

@@ -4,7 +4,11 @@ Round 1 ships reads only — series, the event registry, the manifest,
 coverage — plus /health and /readiness. Round 2 adds the forecast
 surface: run a forecast, read its contribution breakdown, take the
 approval act that makes it the desk's official view, and draft
-figure-verified commentary. Every response carries the request id
+figure-verified commentary. Round 3 adds the accuracy surface
+(Law 2): run the backtest harness, read its results, read the
+accuracy ledger, and read any forecast's pinned accuracy snapshot —
+the degraded flag rides on every forecast read; there is no
+parameter that takes it off. Every response carries the request id
 the logging middleware assigned, so a figure on a desk screen can be
 traced to the exact stored rows behind it.
 """
@@ -18,6 +22,8 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from fmcg_forecast.backtest.harness import run_all as run_backtest_harness
+from fmcg_forecast.backtest.pack import load_accuracy_pack
 from fmcg_forecast.catalogue import COMMODITIES
 from fmcg_forecast.forecast.engine import (
     ForecastError,
@@ -52,13 +58,17 @@ class ApproveRequest(BaseModel):
     decided_on: date | None = None
 
 
+class BacktestRunRequest(BaseModel):
+    pack_version: str | None = None
+
+
 def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     service = ForecastService(store, model or OfflineModel())
     app = FastAPI(
         title="FMCG Commodity Forecast — Operations API",
-        version="0.2.0",
+        version="0.3.0",
         description="Read surfaces for the commodity price & driver store, "
-        "plus the governed forecast surface.",
+        "the governed forecast surface, and the backtest/accuracy surface.",
     )
 
     @app.middleware("http")
@@ -274,5 +284,96 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
                 status_code=404, detail=f"forecast {forecast_id} has no commentary"
             )
         return commentary.model_dump(mode="json")
+
+    @app.get("/forecasts/{forecast_id}/accuracy")
+    def get_forecast_accuracy(forecast_id: str) -> dict:
+        try:
+            return service.accuracy_view(forecast_id)
+        except ForecastNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    # -- backtests + the accuracy ledger (R3) ---------------------------
+
+    @app.post("/backtests/run")
+    def run_backtests(body: BacktestRunRequest | None = None) -> dict:
+        try:
+            pack = load_accuracy_pack(body.pack_version if body else None)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            report, records = run_backtest_harness(store, pack)
+        except ForecastError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "pack_version": pack.version,
+            "results_stored": report.results_stored,
+            "results_already_on_record": report.results_already_on_record,
+            "engine_runs": report.engine_runs,
+            "skipped": report.skipped,
+            "ledger_records": len(records),
+            "degraded_records": [
+                {
+                    "commodity": r.commodity,
+                    "market": r.market,
+                    "horizon_days": r.horizon_days,
+                    "mape": r.mape,
+                }
+                for r in records
+                if r.degraded
+            ],
+        }
+
+    @app.get("/backtests")
+    def list_backtests(
+        commodity: str | None = Query(None),
+        market: str | None = Query(None),
+        horizon_days: int | None = Query(None),
+    ) -> dict:
+        found = store.list_backtest_results(commodity, market, horizon_days)
+        return {
+            "results": [
+                {
+                    "result_id": r.result_id,
+                    "commodity": r.commodity,
+                    "market": r.market,
+                    "origin": r.origin.isoformat(),
+                    "horizon_days": r.horizon_days,
+                    "forecast_id": r.forecast_id,
+                    "n_days": r.n_days,
+                    "mae": r.mae,
+                    "mape": r.mape,
+                    "bias": r.bias,
+                    "coverage": r.coverage,
+                }
+                for r in found
+            ]
+        }
+
+    @app.get("/backtests/{result_id}")
+    def get_backtest(result_id: str) -> dict:
+        found = store.get_backtest_result(result_id)
+        if found is None:
+            raise HTTPException(
+                status_code=404, detail=f"unknown backtest result {result_id}"
+            )
+        return found.model_dump(mode="json")
+
+    @app.get("/accuracy")
+    def list_accuracy(
+        commodity: str | None = Query(None), market: str | None = Query(None)
+    ) -> dict:
+        found = store.list_accuracy_records(commodity, market)
+        return {"records": [r.model_dump(mode="json") for r in found]}
+
+    @app.get("/accuracy/{commodity}/{market}/{horizon_days}")
+    def get_accuracy(commodity: str, market: str, horizon_days: int) -> dict:
+        found = store.get_accuracy_record(commodity, market, horizon_days)
+        if found is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"no accuracy record for {commodity}/{market} at "
+                f"{horizon_days} days — the harness has not covered it",
+            )
+        return found.model_dump(mode="json")
 
     return app

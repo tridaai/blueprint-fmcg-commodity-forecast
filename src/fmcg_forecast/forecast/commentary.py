@@ -34,6 +34,11 @@ def allowed_figures(forecast: Forecast) -> set[float]:
     for line in forecast.lines:
         values.update(line.at_horizon.values())
     values.add(forecast.method.sparsity.multiplier)
+    if forecast.accuracy is not None:
+        for slice_ in forecast.accuracy.per_horizon:
+            for value in (slice_.mae, slice_.mape, slice_.bias, slice_.coverage):
+                if value is not None:
+                    values.add(value)
     return values
 
 
@@ -75,4 +80,14 @@ def commentary_figures(forecast: Forecast) -> dict[str, str]:
             f"{by_horizon[30].contributions[name]:.2f}"
         )
     figures["Sparsity widening factor"] = f"{forecast.method.sparsity.multiplier:.4f}"
+    if forecast.accuracy is not None:
+        figures["Backtest accuracy state"] = forecast.accuracy.state
+        for slice_ in forecast.accuracy.per_horizon:
+            if slice_.mape is None:
+                continue
+            h = slice_.horizon_days
+            figures[f"Backtest MAPE at {h} days (%)"] = f"{slice_.mape:.2f}"
+            figures[f"Backtest interval coverage at {h} days"] = (
+                f"{slice_.coverage:.4f}"
+            )
     return figures
