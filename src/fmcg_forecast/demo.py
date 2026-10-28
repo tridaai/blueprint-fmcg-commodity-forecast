@@ -71,6 +71,38 @@ def main() -> int:
     print(f"coffee (thin data): {coffee.history_days_per_market} reporting days, "
           f"{coffee.history_rows} rows, missing drivers named: {coffee.missing_drivers}, "
           f"rows inside the planted disruption window: {len(disruption_rows)}")
+
+    print("\n--- forecast engine (R2): computed, decomposed, gated ---")
+    from fmcg_forecast.forecast.service import ForecastService
+    from fmcg_forecast.modelport import build_model_port
+
+    service = ForecastService(store, build_model_port(settings))
+    wheat = service.run_forecast("wheat", "delhi_khari_baoli")
+    print(f"wheat/delhi forecast {wheat.forecast_id} as of {wheat.as_of} (status: {wheat.status})")
+    for summary in wheat.horizons_summary:
+        drivers = ", ".join(
+            f"{name} {value:+.2f}" for name, value in summary.contributions.items()
+        )
+        print(f"  {summary.horizon_days:>2}d {summary.forecast_date}: baseline {summary.baseline:.2f} "
+              f"-> P50 {summary.p50:.2f} (P10 {summary.p10:.2f} / P90 {summary.p90:.2f}); {drivers}")
+    problems = service.verify_stored(wheat.forecast_id)
+    print(f"  re-performance verification of the stored artefact: {len(problems)} problems")
+    commentary = service.draft_commentary(wheat.forecast_id)
+    print(f"  commentary (model profile {commentary.model_profile}, figures verified):")
+    print(f"    {commentary.text}")
+    approval = service.approve(
+        wheat.forecast_id, approver="r.menon", role="Head of Trading Desk",
+        decided_on=date(2026, 1, 2),
+    )
+    print(f"  approval act {approval.approval_id}: {approval.approver} ({approval.role}) "
+          f"made it the official view on {approval.decided_on}")
+
+    coffee_fc = service.run_forecast("coffee", "bengaluru")
+    h30 = next(s for s in coffee_fc.horizons_summary if s.horizon_days == 30)
+    print(f"coffee/bengaluru forecast {coffee_fc.forecast_id}: missing drivers named "
+          f"{coffee_fc.missing_drivers}; sparsity widening x{coffee_fc.method.sparsity.multiplier} "
+          f"(wheat x{wheat.method.sparsity.multiplier}); 30d band {h30.p10:.2f}..{h30.p90:.2f} "
+          f"around P50 {h30.p50:.2f}")
     print(f"sealed truth rows stored: {truth_store.count()} (readable only via the truth store)")
     return 0
 

@@ -1,9 +1,12 @@
 """The operations API: read surfaces over the store port.
 
 Round 1 ships reads only — series, the event registry, the manifest,
-coverage — plus /health and /readiness. Every response carries the
-request id the logging middleware assigned, so a figure on a desk
-screen can be traced to the exact stored rows behind it.
+coverage — plus /health and /readiness. Round 2 adds the forecast
+surface: run a forecast, read its contribution breakdown, take the
+approval act that makes it the desk's official view, and draft
+figure-verified commentary. Every response carries the request id
+the logging middleware assigned, so a figure on a desk screen can be
+traced to the exact stored rows behind it.
 """
 
 from __future__ import annotations
@@ -13,19 +16,49 @@ from datetime import date
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from fmcg_forecast.catalogue import COMMODITIES
+from fmcg_forecast.forecast.engine import (
+    ForecastError,
+    InsufficientHistoryError,
+    SealedWindowRefusal,
+    UnknownSeriesError,
+)
+from fmcg_forecast.forecast.service import (
+    ApprovalStateError,
+    ApprovalValidationError,
+    CommentaryVerificationError,
+    ForecastNotFoundError,
+    ForecastService,
+)
 from fmcg_forecast.logging_config import new_request_id, request_id_var
+from fmcg_forecast.modelport import ModelPort, OfflineModel
 from fmcg_forecast.store import SqlStore
 
 log = logging.getLogger("fmcg.api")
 
 
-def create_app(store: SqlStore) -> FastAPI:
+class RunForecastRequest(BaseModel):
+    commodity: str
+    market: str
+    as_of: date | None = None
+    via_backtest: bool = False
+
+
+class ApproveRequest(BaseModel):
+    approver: str
+    role: str
+    decided_on: date | None = None
+
+
+def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
+    service = ForecastService(store, model or OfflineModel())
     app = FastAPI(
         title="FMCG Commodity Forecast — Operations API",
-        version="0.1.0",
-        description="Read surfaces for the commodity price & driver store.",
+        version="0.2.0",
+        description="Read surfaces for the commodity price & driver store, "
+        "plus the governed forecast surface.",
     )
 
     @app.middleware("http")
@@ -125,5 +158,121 @@ def create_app(store: SqlStore) -> FastAPI:
             if entry.commodity == commodity:
                 return entry.model_dump(mode="json")
         raise HTTPException(status_code=404, detail=f"unknown commodity {commodity}")
+
+    # -- forecasts (R2) -------------------------------------------------
+
+    @app.post("/forecasts/run")
+    def run_forecast(body: RunForecastRequest) -> dict:
+        try:
+            forecast = service.run_forecast(
+                body.commodity,
+                body.market,
+                body.as_of,
+                via_backtest=body.via_backtest,
+            )
+        except SealedWindowRefusal as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except UnknownSeriesError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except InsufficientHistoryError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ForecastError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return forecast.model_dump(mode="json")
+
+    @app.get("/forecasts")
+    def list_forecasts(
+        commodity: str | None = Query(None), market: str | None = Query(None)
+    ) -> dict:
+        found = service.list_forecasts(commodity, market)
+        return {
+            "forecasts": [
+                {
+                    "forecast_id": f.forecast_id,
+                    "commodity": f.commodity,
+                    "market": f.market,
+                    "as_of": f.as_of.isoformat(),
+                    "status": f.status,
+                    "engine_version": f.engine_version,
+                }
+                for f in found
+            ]
+        }
+
+    @app.get("/forecasts/{forecast_id}")
+    def get_forecast(forecast_id: str) -> dict:
+        try:
+            return service.get_forecast(forecast_id).model_dump(mode="json")
+        except ForecastNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/forecasts/{forecast_id}/contributions")
+    def get_contributions(forecast_id: str) -> dict:
+        try:
+            return service.contributions(forecast_id)
+        except ForecastNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/forecasts/{forecast_id}/verify")
+    def verify_forecast_endpoint(forecast_id: str) -> dict:
+        try:
+            problems = service.verify_stored(forecast_id)
+        except ForecastNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"forecast_id": forecast_id, "problems": problems}
+
+    @app.post("/forecasts/{forecast_id}/approve")
+    def approve(forecast_id: str, body: ApproveRequest) -> dict:
+        try:
+            approval = service.approve(
+                forecast_id,
+                body.approver,
+                body.role,
+                body.decided_on or date.today(),
+            )
+        except ForecastNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ApprovalValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ApprovalStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return approval.model_dump(mode="json")
+
+    @app.get("/forecasts/{forecast_id}/approval")
+    def get_approval(forecast_id: str) -> dict:
+        try:
+            approval = service.get_approval(forecast_id)
+        except ForecastNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if approval is None:
+            raise HTTPException(
+                status_code=404, detail=f"forecast {forecast_id} has no approval act"
+            )
+        return approval.model_dump(mode="json")
+
+    @app.post("/forecasts/{forecast_id}/commentary")
+    def draft_commentary(forecast_id: str) -> dict:
+        try:
+            commentary = service.draft_commentary(forecast_id)
+        except ForecastNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except CommentaryVerificationError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"message": str(exc), "problems": exc.problems},
+            ) from exc
+        return commentary.model_dump(mode="json")
+
+    @app.get("/forecasts/{forecast_id}/commentary")
+    def get_commentary(forecast_id: str) -> dict:
+        try:
+            commentary = service.get_commentary(forecast_id)
+        except ForecastNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if commentary is None:
+            raise HTTPException(
+                status_code=404, detail=f"forecast {forecast_id} has no commentary"
+            )
+        return commentary.model_dump(mode="json")
 
     return app

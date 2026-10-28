@@ -70,6 +70,34 @@ def main() -> int:
         checks.append(
             ("coffee coverage names gaps", r.status_code == 200 and "stock_level" in r.json()["missing_drivers"])
         )
+        r = client.post(
+            f"{BASE}/forecasts/run",
+            json={"commodity": "wheat", "market": "indore"},
+        )
+        forecast_id = r.json()["forecast_id"] if r.status_code == 200 else None
+        checks.append(
+            ("forecast run", r.status_code == 200 and r.json()["status"] == "draft" and len(r.json()["days"]) == 90)
+        )
+        r = client.get(f"{BASE}/forecasts/{forecast_id}/contributions")
+        checks.append(
+            ("contribution breakdown", r.status_code == 200 and len(r.json()["lines"]) == 5)
+        )
+        r = client.get(f"{BASE}/forecasts/{forecast_id}/verify")
+        checks.append(
+            ("stored forecast verifies", r.status_code == 200 and r.json()["problems"] == [])
+        )
+        r = client.post(f"{BASE}/forecasts/{forecast_id}/commentary")
+        checks.append(("commentary drafted + verified", r.status_code == 200 and bool(r.json()["text"])))
+        r = client.post(
+            f"{BASE}/forecasts/{forecast_id}/approve",
+            json={"approver": "r.menon", "role": "Head of Trading Desk", "decided_on": "2026-01-02"},
+        )
+        checks.append(("approval act", r.status_code == 200 and r.json()["forecast_id"] == forecast_id))
+        r = client.post(
+            f"{BASE}/forecasts/run",
+            json={"commodity": "wheat", "market": "indore", "as_of": "2026-02-01"},
+        )
+        checks.append(("sealed window refused over HTTP", r.status_code == 403))
         for name, ok in checks:
             print(f"  {'PASS' if ok else 'FAIL'}  {name}")
         return 0 if all(ok for _, ok in checks) else 1
