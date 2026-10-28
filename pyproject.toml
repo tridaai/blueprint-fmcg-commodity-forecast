@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "trida-blueprint-fmcg-commodity-forecast"
+version = "0.1.0"
+description = "Trida AI Blueprint — Commodity Price Forecasting & Procurement Intelligence Agent for an FMCG/food buyer's trading desk (reference prototype)"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12,<3.13"
+# Direct dependencies are pinned EXACTLY (==). The full transitive set
+# is frozen in constraints.txt; the pip fallback installs that set
+# first and the package itself second (see Makefile, target
+# install-pip).
+dependencies = [
+    "fastapi==0.162.0",
+    "pydantic==2.14.1",
+    "uvicorn==0.54.0",
+    "psycopg[binary]==3.2.9",
+    # Agent orchestration: LangGraph state machines (ingest -> compute
+    # -> explain -> scenario -> human gate -> publish).
+    "langgraph==0.6.11",
+    # Deterministic numerics under the stated in-repo engines. The
+    # forecast decomposition is ours; these are utilities, never a
+    # black-box forecaster.
+    "numpy==2.5.4",
+    "pandas==3.1.0",
+    "statsmodels==0.15.0",
+    # Analytical scans / backtesting over the same artefacts (R3+).
+    "duckdb==2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx==0.28.1",
+    "pytest==8.3.4",
+]
+
+[project.scripts]
+fmcg-agent-demo = "fmcg_forecast.demo:main"
+fmcg-agent-serve = "fmcg_forecast.serve:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fmcg_forecast"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
