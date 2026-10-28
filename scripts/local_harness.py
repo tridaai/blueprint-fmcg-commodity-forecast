@@ -116,21 +116,21 @@ def main() -> int:
                 and len(r.json()["skipped"]) == 5,
             )
         )
-        r = client.get("/accuracy/chili/guntur/30")
+        r = client.get(f"{BASE}/accuracy/chili/guntur/30")
         checks.append(
             (
                 "chili/guntur 30d record is degraded",
                 r.status_code == 200 and r.json()["degraded"] is True and r.json()["mape"] > 5.0,
             )
         )
-        r = client.get("/accuracy/wheat/delhi_khari_baoli/30")
+        r = client.get(f"{BASE}/accuracy/wheat/delhi_khari_baoli/30")
         checks.append(
             (
                 "wheat/delhi 30d record is measured, not degraded",
                 r.status_code == 200 and r.json()["degraded"] is False,
             )
         )
-        checksel = client.get("/backtests", params={"commodity": "coffee"})
+        checksel = client.get(f"{BASE}/backtests", params={"commodity": "coffee"})
         checks.append(
             ("coffee backtest results listed", checksel.status_code == 200 and len(checksel.json()["results"]) == 15)
         )
