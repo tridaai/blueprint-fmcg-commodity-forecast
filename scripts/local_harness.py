@@ -9,6 +9,9 @@ not-estimable for groundnut). Round 5 adds the event registry: the
 seeded planted shocks with their transmission verdicts, the
 drought's what-happened view, an analyst declaration over HTTP,
 and the declared event landing on a forecast as its own line.
+Round 6 adds the scenario studio: the pack read, a typed what-if
+parsed and refused over HTTP, the fork run with its diff, and
+the adoption gate from placeholder refusal to the adopted view.
 """
 
 from __future__ import annotations
@@ -287,6 +290,133 @@ def main() -> int:
                 r.status_code == 200 and r.json()["problems"] == [],
             )
         )
+        r = client.get(f"{BASE}/scenarios/pack")
+        checks.append(
+            (
+                "scenario pack states the bounded lever catalogue",
+                r.status_code == 200
+                and "arrivals_shift_pct" in r.json()["levers"]
+                and r.json()["levers"]["arrivals_shift_pct"]["max_value"] == 40.0,
+            )
+        )
+        r = client.post(
+            f"{BASE}/scenarios/requests",
+            json={
+                "commodity": "wheat",
+                "market": "indore",
+                "text": "what if arrivals drop 10% and stock cover rises by 5 days?",
+                "base_forecast_id": forecast_id,
+            },
+        )
+        scenario_request = r.json() if r.status_code == 201 else {}
+        checks.append(
+            (
+                "typed what-if parses into the bounded lever set",
+                r.status_code == 201
+                and [l["lever"] for l in scenario_request.get("levers", [])]
+                == ["arrivals_shift_pct", "stock_cover_days"],
+            )
+        )
+        r = client.post(
+            f"{BASE}/scenarios/requests",
+            json={
+                "commodity": "wheat",
+                "market": "indore",
+                "text": "what if the monsoon fails completely?",
+                "base_forecast_id": forecast_id,
+            },
+        )
+        checks.append(
+            (
+                "an out-of-catalogue what-if is refused with its clause",
+                r.status_code == 422
+                and r.json()["detail"]["clause"] == "the monsoon fails completely",
+            )
+        )
+        r = client.post(
+            f"{BASE}/scenarios",
+            json={
+                "request_id": scenario_request.get("request_id"),
+                "base_forecast_id": forecast_id,
+                "author": "a.sharma",
+                "created_on": "2026-01-03",
+            },
+        )
+        scenario_view = r.json() if r.status_code == 201 else {}
+        scenario_id = scenario_view.get("scenario_id")
+        checks.append(
+            (
+                "scenario run is a labelled draft fork",
+                r.status_code == 201
+                and scenario_view.get("view_kind") == "scenario_draft"
+                and scenario_view.get("base", {}).get("forecast_id") == forecast_id,
+            )
+        )
+        r = client.get(f"{BASE}/scenarios/{scenario_id}/diff")
+        diff_body = r.json() if r.status_code == 200 else {}
+        checks.append(
+            (
+                "scenario diff sums to the P50 difference",
+                r.status_code == 200
+                and abs(
+                    sum(diff_body.get("driver_totals", {}).values())
+                    + diff_body.get("events_total", 0.0)
+                    - diff_body.get("p50_total", 0.0)
+                )
+                < 0.005,
+            )
+        )
+        r = client.get(f"{BASE}/scenarios/{scenario_id}/verify")
+        checks.append(
+            (
+                "stored scenario re-performs clean",
+                r.status_code == 200 and r.json()["problems"] == [],
+            )
+        )
+        r = client.get(f"{BASE}/scenarios/adopted/wheat/indore")
+        checks.append(
+            (
+                "no adopted view before the adoption act",
+                r.status_code == 200 and r.json()["state"] == "none",
+            )
+        )
+        r = client.post(
+            f"{BASE}/scenarios/{scenario_id}/adopt",
+            json={"adopter": "unknown", "role": "Head of Trading Desk"},
+        )
+        checks.append(("placeholder adopter refused", r.status_code == 422))
+        r = client.post(
+            f"{BASE}/scenarios/{scenario_id}/adopt",
+            json={
+                "adopter": "r.menon",
+                "role": "Head of Trading Desk",
+                "decided_on": "2026-01-04",
+            },
+        )
+        checks.append(
+            (
+                "adoption act lands",
+                r.status_code == 200 and r.json()["scenario_id"] == scenario_id,
+            )
+        )
+        r = client.get(f"{BASE}/scenarios/adopted/wheat/indore")
+        checks.append(
+            (
+                "adopted view reads as the adopted scenario",
+                r.status_code == 200
+                and r.json()["state"] == "adopted"
+                and r.json()["scenario"]["view_kind"] == "adopted_scenario",
+            )
+        )
+        r = client.post(
+            f"{BASE}/scenarios/{scenario_id}/adopt",
+            json={
+                "adopter": "r.menon",
+                "role": "Head of Trading Desk",
+                "decided_on": "2026-01-05",
+            },
+        )
+        checks.append(("re-adoption refused as a state error", r.status_code == 409))
         for name, ok in checks:
             print(f"  {'PASS' if ok else 'FAIL'}  {name}")
         return 0 if all(ok for _, ok in checks) else 1

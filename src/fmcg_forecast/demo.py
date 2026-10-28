@@ -238,6 +238,77 @@ def main() -> int:
     problems = wired.verify_stored(shocked.forecast_id)
     print(f"  re-performance of the shocked artefact (decomposition + "
           f"per-event lines): {len(problems)} problems")
+
+    print("\n--- scenario studio (R6, Law 5): bounded levers, pinned forks, a human adoption gate ---")
+    from fmcg_forecast.scenarios.service import (
+        ScenarioParseError,
+        ScenarioService,
+    )
+
+    scenarios = ScenarioService(
+        store,
+        build_model_port(settings),
+        wired,
+        events,
+        sentiment_provider=sentiment.forecast_input,
+    )
+    what_if = "what if arrivals drop 10% and the tariff stays another month?"
+    request = scenarios.parse_request(
+        "soybean", "indore", what_if, base_forecast_id=shocked.forecast_id
+    )
+    print(f"typed what-if: {what_if!r}")
+    print(f"  parsed request {request.request_id} under pack "
+          f"{request.pack_version} (model profile {request.model_profile}):")
+    for lever in request.levers:
+        detail = (
+            f"{lever.value:+g}" if lever.value is not None else
+            f"event {lever.event_id} +{lever.extra_days} days"
+        )
+        print(f"    {lever.lever:<18} {detail}   <- clause {lever.clause!r}")
+    run = scenarios.run_scenario(
+        request.request_id, shocked.forecast_id, author="a.sharma",
+        created_on=date(2026, 1, 3),
+    )
+    for shift in run.shifts:
+        print(f"  lever became a driver-input shift: {shift.driver} "
+              f"{shift.mode} {shift.value:+.4f} (from "
+              f"{shift.basis_stats})")
+    extended = run.scenario_events[0]
+    print(f"  the tariff's prolongation is a scenario-local event "
+          f"{extended.event_id}: window now ends {extended.window_end} "
+          f"(the registry record is untouched)")
+    diff = scenarios.diff(run.scenario_id)
+    print(f"  fork {run.fork_forecast_id} vs base {shocked.forecast_id}: "
+          f"P50 difference at 7/30/90 days "
+          f"{diff.at_horizons['7']:+.2f} / {diff.at_horizons['30']:+.2f} / "
+          f"{diff.at_horizons['90']:+.2f} INR; driver totals "
+          + ", ".join(f"{k} {v:+.2f}" for k, v in diff.driver_totals.items())
+          + f"; events {diff.events_total:+.2f}; whole-horizon "
+          f"{diff.p50_total:+.2f} — the parts sum to the total exactly")
+    print(f"  re-performance of the stored run: "
+          f"{len(scenarios.verify_stored(run.scenario_id))} problems")
+    print(f"  before any act, the desk's adopted view for soybean/indore: "
+          f"{scenarios.adopted_view('soybean', 'indore')['state']} — the "
+          f"scenario reads as '{scenarios.scenario_view(run.scenario_id)['view_kind']}'")
+    adoption = scenarios.adopt(
+        run.scenario_id, adopter="r.menon", role="Head of Trading Desk",
+        decided_on=date(2026, 1, 4),
+    )
+    adopted = scenarios.adopted_view("soybean", "indore")
+    print(f"  adoption act {adoption.adoption_id}: {adoption.adopter} "
+          f"({adoption.role}) adopted it on {adoption.decided_on}; the "
+          f"adopted view now reads '{adopted['scenario']['view_kind']}' "
+          f"and the base forecast keeps its own status "
+          f"({wired.get_forecast(shocked.forecast_id).status})")
+    try:
+        scenarios.parse_request(
+            "soybean", "indore",
+            "what if the monsoon fails completely?",
+            base_forecast_id=shocked.forecast_id,
+        )
+    except ScenarioParseError as refusal:
+        print(f"  an out-of-catalogue what-if is refused, not improvised: "
+              f"clause {refusal.clause!r} — {refusal.reason}")
     print(f"sealed truth rows stored: {truth_store.count()} (readable only via the truth store)")
     return 0
 
