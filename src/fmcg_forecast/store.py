@@ -15,6 +15,7 @@ from datetime import date
 from pathlib import Path
 from typing import Protocol
 
+from fmcg_forecast.events.models import MarketEvent
 from fmcg_forecast.forecast.models import (
     AccuracyRecord,
     BacktestResult,
@@ -96,6 +97,12 @@ class Store(Protocol):
     def get_index(
         self, commodity: str, week_start: date
     ) -> SentimentIndex | None: ...
+    # -- governed event registry (R5) ----------------------------------
+    def insert_market_event(self, event: MarketEvent) -> None: ...
+    def get_market_event(self, event_id: str) -> MarketEvent | None: ...
+    def list_market_events(
+        self, commodity: str | None = None
+    ) -> list[MarketEvent]: ...
     def close(self) -> None: ...
 
 
@@ -681,6 +688,53 @@ class SqlStore:
         )
         row = cur.fetchone()
         return SentimentIndex.model_validate(json.loads(row[0])) if row else None
+
+    # -- governed event registry (R5) ----------------------------------
+    # Declarations are insert-only, like forecasts: the service
+    # checks the content address before inserting, so re-declaring
+    # or re-seeding the same event is a no-op rather than a
+    # duplicate-write error, and a stored declaration is never
+    # rewritten.
+
+    def insert_market_event(self, event: MarketEvent) -> None:
+        sql = self._q(
+            "INSERT INTO market_events (event_id, commodity, event_class, "
+            "window_start, payload) VALUES (?, ?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                event.event_id,
+                event.commodity,
+                event.event_class,
+                self._date_param(event.window_start),
+                event.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_market_event(self, event_id: str) -> MarketEvent | None:
+        cur = self._conn.execute(
+            self._q("SELECT payload FROM market_events WHERE event_id = ?"),
+            (event_id,),
+        )
+        row = cur.fetchone()
+        return MarketEvent.model_validate(json.loads(row[0])) if row else None
+
+    def list_market_events(
+        self, commodity: str | None = None
+    ) -> list[MarketEvent]:
+        sql = "SELECT payload FROM market_events"
+        params: list = []
+        if commodity is not None:
+            sql += " WHERE commodity = ?"
+            params.append(commodity)
+        sql += " ORDER BY window_start, event_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            MarketEvent.model_validate(json.loads(r[0])) for r in cur.fetchall()
+        ]
 
     def close(self) -> None:
         self._conn.close()
