@@ -38,6 +38,35 @@ Round 2 counters (forecast engine), also zero-tolerance:
 - events_slot_violations: the events slot non-zero on a plain run,
   or failing to apply (with the decomposition intact) when filled.
 
+Round 3 counters (backtesting + accuracy ledger, Law 2), also
+zero-tolerance:
+
+- backtest_grid_errors: the harness storing anything but the pack's
+  grid (405 results, 135 engine runs, exactly coffee's five
+  unstatable origins skipped, 42 ledger records), or a re-run
+  storing duplicates.
+- metric_fixture_errors: the hand-computed metric fixtures (a
+  four-day scored slice; a three-origin windowed aggregation)
+  recomputed wrong.
+- backtest_result_verify_failures: stored results the
+  re-performance verifier flags, or a tampered result it misses.
+- ledger_reperformance_failures: ledger records that do not
+  re-perform from the result artefacts of record.
+- degraded_flag_errors: a record whose degraded stamp disagrees
+  with its MAPE vs the pack bar, a degraded set other than the
+  planted noisy series (chili at Guntur, 30/90 days), or a fresh
+  forecast whose pinned state disagrees with the ledger.
+- degraded_flag_suppressed: any read path (including a caller
+  asking for a "clean" view) returning the degraded forecast
+  without its flag.
+- unmeasured_unnamed: a forecast run before any backtest coverage
+  whose accuracy is not explicitly named unmeasured.
+- sealed_check_failures: the boundary dry-run against the sealed
+  truth — a horizon with no scored days, MAPE at or above the
+  stated 10% bound, or interval coverage below 0.80, for wheat or
+  coffee. (Eval-only composition: the gate hands truth rows to the
+  harness's scoring; no product code reads the truth store.)
+
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
 
@@ -64,9 +93,12 @@ def mean_price(store, commodity, market, start, end) -> float:
 
 
 def truth_isolation_violations() -> int:
-    package = Path(__file__).resolve().parents[1] / "src" / "fmcg_forecast" / "forecast"
+    base = Path(__file__).resolve().parents[1] / "src" / "fmcg_forecast"
     violations = 0
-    for path in package.rglob("*.py"):
+    paths = list((base / "forecast").rglob("*.py")) + list(
+        (base / "backtest").rglob("*.py")
+    )
+    for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -107,6 +139,14 @@ def main() -> int:
         "sealed_window_acceptances": 0,
         "commentary_figure_violations_accepted": 0,
         "events_slot_violations": 0,
+        "backtest_grid_errors": 0,
+        "metric_fixture_errors": 0,
+        "backtest_result_verify_failures": 0,
+        "ledger_reperformance_failures": 0,
+        "degraded_flag_errors": 0,
+        "degraded_flag_suppressed": 0,
+        "unmeasured_unnamed": 0,
+        "sealed_check_failures": 0,
     }
 
     # --- planted events, measured seasonally-matched ---------------
@@ -315,7 +355,141 @@ def main() -> int:
         counters["events_slot_violations"] += 1
     counters["events_slot_violations"] += len(verify_forecast(shocked))
 
-    print("Round 2 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine)")
+    # --- R3: backtesting + the accuracy ledger (Law 2) -----------------
+    from fmcg_forecast.backtest import metrics as bt_metrics
+    from fmcg_forecast.backtest.harness import run_all, score_sealed_boundary
+    from fmcg_forecast.backtest.pack import load_accuracy_pack
+    from fmcg_forecast.backtest.verify import (
+        verify_accuracy_record,
+        verify_backtest_result,
+    )
+
+    pack = load_accuracy_pack()
+
+    # Unmeasured must be named BEFORE the harness runs: this forecast
+    # is the first groundnut/gondal run on this store.
+    pre = service.run_forecast("groundnut", "gondal")
+    if (
+        pre.accuracy is None
+        or pre.accuracy.state != "unmeasured"
+        or "unmeasured" not in pre.accuracy.note
+        or any(s.state != "unmeasured" for s in pre.accuracy.per_horizon)
+    ):
+        counters["unmeasured_unnamed"] += 1
+
+    # Metric fixtures, worked by hand (see tests/test_r3.py for the
+    # arithmetic): four scored days against band (180, 200, 220).
+    _, sums = bt_metrics.score_days(
+        [
+            (_date(2025, 1, 2), 180.0, 200.0, 220.0),
+            (_date(2025, 1, 3), 180.0, 200.0, 220.0),
+            (_date(2025, 1, 4), 180.0, 200.0, 220.0),
+            (_date(2025, 1, 5), 180.0, 200.0, 220.0),
+        ],
+        {
+            _date(2025, 1, 2): 210.0,
+            _date(2025, 1, 3): 190.0,
+            _date(2025, 1, 4): 200.0,
+            _date(2025, 1, 5): 250.0,
+        },
+    )
+    if not (
+        sums["n_days"] == 4
+        and sums["covered_days"] == 3
+        and sums["sum_err"] == 50.0
+        and sums["sum_abs_err"] == 70.0
+        and sums["mae"] == 17.5
+        and sums["bias"] == 12.5
+        and sums["coverage"] == 0.75
+        and sums["mape"] == round(100.0 * round(1 / 21 + 1 / 19 + 0.2, 6) / 4, 4)
+    ):
+        counters["metric_fixture_errors"] += 1
+
+    report, records = run_all(store, pack)
+    if report.results_stored != 405 or report.engine_runs != 135:
+        counters["backtest_grid_errors"] += 1
+    if len(report.skipped) != 5 or {s["commodity"] for s in report.skipped} != {"coffee"}:
+        counters["backtest_grid_errors"] += 1
+    if len(records) != 42:
+        counters["backtest_grid_errors"] += 1
+    report2, _ = run_all(store, pack)
+    if report2.results_stored != 0 or report2.results_already_on_record != 405:
+        counters["backtest_grid_errors"] += 1
+
+    stored_results = store.list_backtest_results()
+    if len(stored_results) != 405:
+        counters["backtest_grid_errors"] += 1
+    for result in stored_results:
+        counters["backtest_result_verify_failures"] += len(
+            verify_backtest_result(result)
+        )
+    tampered_result = stored_results[0].model_copy(deep=True)
+    tampered_result.days[0].realised += 500.0
+    if not verify_backtest_result(tampered_result):
+        counters["backtest_result_verify_failures"] += 1
+
+    for record in records:
+        results = store.list_backtest_results(
+            record.commodity, record.market, record.horizon_days
+        )
+        counters["ledger_reperformance_failures"] += len(
+            verify_accuracy_record(record, results, pack)
+        )
+        if record.degraded != (record.mape > pack.degraded_mape_pct):
+            counters["degraded_flag_errors"] += 1
+    degraded_set = {
+        (r.commodity, r.market, r.horizon_days) for r in records if r.degraded
+    }
+    if degraded_set != {("chili", "guntur", 30), ("chili", "guntur", 90)}:
+        counters["degraded_flag_errors"] += 1
+
+    chili = service.run_forecast("chili", "guntur")
+    if chili.accuracy is None or chili.accuracy.state != "degraded":
+        counters["degraded_flag_errors"] += 1
+    else:
+        for slice_ in chili.accuracy.per_horizon:
+            record = store.get_accuracy_record("chili", "guntur", slice_.horizon_days)
+            if record is None or slice_.record_id != record.record_id:
+                counters["degraded_flag_errors"] += 1
+            if slice_.state != ("degraded" if record and record.degraded else "measured"):
+                counters["degraded_flag_errors"] += 1
+    fresh_wheat = service.run_forecast("wheat", "indore")
+    if fresh_wheat.accuracy is None or fresh_wheat.accuracy.state != "measured":
+        counters["degraded_flag_errors"] += 1
+    chili_commentary = service.draft_commentary(chili.forecast_id)
+    if "Backtest accuracy state: degraded" not in chili_commentary.text:
+        counters["degraded_flag_errors"] += 1
+
+    from fastapi.testclient import TestClient
+
+    from fmcg_forecast.api import create_app
+
+    client = TestClient(create_app(store, OfflineModel()))
+    for params in ({"view": "clean"}, {"accuracy": "off"}, {"flag": "none"}):
+        r = client.get(f"/forecasts/{chili.forecast_id}", params=params)
+        if r.status_code != 200 or r.json()["accuracy"]["state"] != "degraded":
+            counters["degraded_flag_suppressed"] += 1
+    r = client.get(f"/forecasts/{chili.forecast_id}/accuracy")
+    if r.status_code != 200 or r.json()["accuracy"]["state"] != "degraded":
+        counters["degraded_flag_suppressed"] += 1
+
+    # The sealed-boundary dry run: the R2 section's wheat and coffee
+    # forecasts sit exactly at the history/truth boundary; the gate
+    # hands the truth rows to the harness's scoring (eval-only).
+    for boundary_forecast in (wheat, coffee):
+        truth_rows = truth_store.read_truth(
+            boundary_forecast.commodity, boundary_forecast.market, "modal_price"
+        )
+        scores = score_sealed_boundary(boundary_forecast, truth_rows)
+        for horizon, horizon_sums in scores.items():
+            if horizon_sums["n_days"] == 0:
+                counters["sealed_check_failures"] += 1
+            if horizon_sums["mape"] >= 10.0:
+                counters["sealed_check_failures"] += 1
+            if horizon_sums["coverage"] < 0.80:
+                counters["sealed_check_failures"] += 1
+
+    print("Round 3 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]
