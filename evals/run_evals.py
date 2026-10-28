@@ -18,6 +18,26 @@ contract for everything planted):
 - manifest_mismatches: stored events or trend breaks differing from
   the manifest.
 
+Round 2 counters (forecast engine), also zero-tolerance:
+
+- decomposition_sum_violations: forecast days whose baseline +
+  contributions + events do not re-add to the stated total, or
+  artefacts the re-performance verifier flags.
+- contribution_sign_violations: the planted harvest-window arrivals
+  surge failing to produce a negative arrivals coefficient and a
+  negative 7-day arrivals contribution for wheat.
+- coffee_gap_violations: coffee's missing drivers not named exactly,
+  its sparsity multiplier failing to separate from wheat's by the
+  stated factor, or its 30-day band not wider than wheat's.
+- tamper_undetected: a stored forecast with an altered total that
+  the verifier does not catch.
+- sealed_window_acceptances: an engine run with as_of inside the
+  sealed grading window that is not refused.
+- commentary_figure_violations_accepted: a commentary draft stating
+  a figure the artefact does not carry that gets stored anyway.
+- events_slot_violations: the events slot non-zero on a plain run,
+  or failing to apply (with the decomposition intact) when filled.
+
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
 
@@ -80,6 +100,13 @@ def main() -> int:
         "coffee_sparsity_violations": 0,
         "truth_isolation_violations": 0,
         "manifest_mismatches": 0,
+        "decomposition_sum_violations": 0,
+        "contribution_sign_violations": 0,
+        "coffee_gap_violations": 0,
+        "tamper_undetected": 0,
+        "sealed_window_acceptances": 0,
+        "commentary_figure_violations_accepted": 0,
+        "events_slot_violations": 0,
     }
 
     # --- planted events, measured seasonally-matched ---------------
@@ -204,7 +231,91 @@ def main() -> int:
     if sum(counts.values()) != manifest.history_rows:
         counters["manifest_mismatches"] += 1
 
-    print("Round 1 evals — FMCG commodity forecast (data integrity)")
+    # --- R2: the forecast engine --------------------------------------
+    from datetime import date as _date
+
+    from fmcg_forecast.forecast.engine import (
+        EventAdjustment,
+        SealedWindowRefusal,
+        run_engine,
+    )
+    from fmcg_forecast.forecast.service import (
+        CommentaryVerificationError,
+        ForecastService,
+    )
+    from fmcg_forecast.forecast.verify import verify_forecast
+    from fmcg_forecast.modelport import OfflineModel
+
+    service = ForecastService(store, OfflineModel())
+    wheat = service.run_forecast("wheat", "delhi_khari_baoli")
+    coffee = service.run_forecast("coffee", "bengaluru")
+    soybean = service.run_forecast("soybean", "indore")
+
+    for forecast in (wheat, coffee, soybean):
+        for day in forecast.days:
+            parts = day.baseline + sum(day.contributions.values()) + day.events_adjustment
+            if abs(parts - day.p50) > 0.011:
+                counters["decomposition_sum_violations"] += 1
+        counters["decomposition_sum_violations"] += len(verify_forecast(forecast))
+
+    harvest = run_engine(store, manifest, "wheat", "delhi_khari_baoli", _date(2025, 4, 15))
+    arrivals = next(line for line in harvest.lines if line.driver == "arrivals")
+    if arrivals.coefficient >= 0:
+        counters["contribution_sign_violations"] += 1
+    if arrivals.at_horizon["7"] >= 0:
+        counters["contribution_sign_violations"] += 1
+
+    if coffee.missing_drivers != ["stock_level", "import_flow", "export_flow"]:
+        counters["coffee_gap_violations"] += 1
+    if coffee.method.sparsity.multiplier < 1.5 * wheat.method.sparsity.multiplier:
+        counters["coffee_gap_violations"] += 1
+    c30 = next(s for s in coffee.horizons_summary if s.horizon_days == 30)
+    w30 = next(s for s in wheat.horizons_summary if s.horizon_days == 30)
+    if (c30.p90 - c30.p10) / c30.p50 <= (w30.p90 - w30.p10) / w30.p50:
+        counters["coffee_gap_violations"] += 1
+
+    tampered = soybean.model_copy(deep=True)
+    tampered.days[5].p50 += 250.0
+    if not verify_forecast(tampered):
+        counters["tamper_undetected"] += 1
+
+    try:
+        run_engine(store, manifest, "wheat", "indore", _date(2026, 2, 1))
+        counters["sealed_window_acceptances"] += 1
+    except SealedWindowRefusal:
+        pass
+
+    class _LyingModel:
+        profile_name = "lying"
+
+        def draft_commentary(self, *, subject, figures):
+            return f"{subject}. P50 at 30 days (INR/quintal): 9999.99."
+
+    lying = ForecastService(store, _LyingModel())
+    target = lying.run_forecast("basmati_rice", "karnal")
+    try:
+        lying.draft_commentary(target.forecast_id)
+        counters["commentary_figure_violations_accepted"] += 1
+    except CommentaryVerificationError:
+        pass
+    if store.get_commentary(target.forecast_id) is not None:
+        counters["commentary_figure_violations_accepted"] += 1
+
+    if any(d.events_adjustment != 0.0 for d in wheat.days):
+        counters["events_slot_violations"] += 1
+    shocked = run_engine(
+        store,
+        manifest,
+        "cumin",
+        "unjha",
+        _date(2025, 12, 31),
+        event_adjustments=[EventAdjustment(event_id="EVT-TEST", path=[0.10] * 90)],
+    )
+    if shocked.days[0].events_adjustment <= 0:
+        counters["events_slot_violations"] += 1
+    counters["events_slot_violations"] += len(verify_forecast(shocked))
+
+    print("Round 2 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]
