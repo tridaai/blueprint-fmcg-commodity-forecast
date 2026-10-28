@@ -88,6 +88,35 @@ Round 4 counters (sentiment, Law 3), also zero-tolerance:
   (pack/extract/index/verify/service/models) importing the
   corpus or grading modules, or naming the intent table.
 
+Round 5 counters (event registry + shock handling, Law 4), also
+zero-tolerance:
+
+- event_registry_errors: the historical seeding storing anything
+  but the manifest's three planted shocks, mapped field-for-field
+  (classes, channels, windows, claimed peaks, the drought's
+  weather-channel derivation), or a re-seed duplicating a record.
+- event_transmission_verification_errors: a planted event whose
+  claimed transmission does not verify against the
+  seasonally-matched measurement, a forged wild claim over the
+  real tariff window (or a wrong-sign one) not flagged
+  unverified on the event's face, or a future event reading as
+  anything but not_measurable, named.
+- event_forecast_line_errors: the hand-computed fixture forecast
+  (wheat, +0.10 over 2026-01-10..19, decay 10, as of 2025-12-31)
+  missing the event line at the stated magnitude on any day, a
+  clear run carrying an adjustment, per-event lines that do not
+  compose the day adjustments, or any decomposition failure.
+- event_interval_widening_errors: a shocked forecast day whose
+  log band width is not the plain run's width times the pack's
+  stated factor, or an untouched day whose width moved.
+- event_registration_errors: a declaration the registry accepts
+  that it must refuse (placeholder declarer, channel outside the
+  class, zero peak, inverted window, unknown basis/class/
+  commodity).
+- event_impact_errors: the tariff's what-happened view not
+  measured, its mean effect outside the planted direction, or a
+  future event's impact reading as measured.
+
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
 
@@ -116,8 +145,10 @@ def mean_price(store, commodity, market, start, end) -> float:
 def truth_isolation_violations() -> int:
     base = Path(__file__).resolve().parents[1] / "src" / "fmcg_forecast"
     violations = 0
-    paths = list((base / "forecast").rglob("*.py")) + list(
-        (base / "backtest").rglob("*.py")
+    paths = (
+        list((base / "forecast").rglob("*.py"))
+        + list((base / "backtest").rglob("*.py"))
+        + list((base / "events").rglob("*.py"))
     )
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -173,6 +204,12 @@ def main() -> int:
         "sentiment_contribution_errors": 0,
         "sentiment_claim_violations_accepted": 0,
         "sentiment_intent_isolation_violations": 0,
+        "event_registry_errors": 0,
+        "event_transmission_verification_errors": 0,
+        "event_forecast_line_errors": 0,
+        "event_interval_widening_errors": 0,
+        "event_registration_errors": 0,
+        "event_impact_errors": 0,
     }
 
     # --- planted events, measured seasonally-matched ---------------
@@ -684,7 +721,246 @@ def main() -> int:
                 if imported in ("corpus", "grading"):
                     counters["sentiment_intent_isolation_violations"] += 1
 
-    print("Round 4 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment)")
+    # --- events (R5, Law 4) ---------------------------------------
+    import math as _math
+
+    from fmcg_forecast.events.pack import load_event_pack
+    from fmcg_forecast.events.service import EventService, EventValidationError
+    from fmcg_forecast.events.verify import verify_market_event
+
+    event_pack = load_event_pack()
+    event_service = EventService(store)
+    seeded = event_service.seed_historical(manifest)
+    if len(seeded["seeded"]) != 3 or seeded["total_on_record"] != 3:
+        counters["event_registry_errors"] += 1
+    reseeded = event_service.seed_historical(manifest)
+    if reseeded["seeded"] != [] or len(event_service.list_events()) != 3:
+        counters["event_registry_errors"] += 1
+    by_source = {e.source_record_id: e for e in event_service.list_events()}
+    tariff_ev = by_source.get("EVT-2025-TARIFF-SOYBEAN")
+    ban_ev = by_source.get("EVT-2024-BAN-BASMATI")
+    drought_ev = by_source.get("ANOMALY-CHILI-2025")
+    if tariff_ev is None or ban_ev is None or drought_ev is None:
+        counters["event_registry_errors"] += 1
+    else:
+        if not (
+            tariff_ev.event_class == "tariff_change"
+            and tariff_ev.transmission.channel == "import_flow"
+            and tariff_ev.transmission.peak_log_price_effect == tariff.magnitude
+            and tariff_ev.window_start == tariff.start_date
+            and tariff_ev.window_end == tariff.end_date
+            and tariff_ev.decay_days == tariff.decay_days
+        ):
+            counters["event_registry_errors"] += 1
+        if not (
+            ban_ev.event_class == "export_restriction"
+            and ban_ev.transmission.channel == "export_flow"
+            and ban_ev.transmission.driver_effect == 0.05
+            and ban_ev.transmission.peak_log_price_effect == ban.magnitude
+            and ban_ev.window_start == ban.start_date
+            and ban_ev.window_end == ban.end_date
+        ):
+            counters["event_registry_errors"] += 1
+        if not (
+            drought_ev.event_class == "weather_shock"
+            and drought_ev.transmission.channel == "weather_index"
+            and drought_ev.transmission.driver_effect == -0.6
+            and abs(drought_ev.transmission.peak_log_price_effect - 0.036) < 1e-9
+            and drought_ev.direction == 1
+        ):
+            counters["event_registry_errors"] += 1
+        for planted_ev in (tariff_ev, ban_ev, drought_ev):
+            counters["event_registry_errors"] += len(
+                verify_market_event(planted_ev, event_pack)
+            )
+    counters["event_registry_errors"] += len(
+        event_service.verify_registry()["problems"]
+    )
+
+    # Claimed transmissions vs the seasonally-matched measurement:
+    # the planted three verify; a wild claim and a wrong-sign claim
+    # over the real tariff window are flagged unverified, on the
+    # event's face as well as at the dedicated read.
+    for planted_ev, lo, hi in ((tariff_ev, 1.06, 1.24), (ban_ev, 0.83, 0.96)):
+        verdict = event_service.verify_event(planted_ev.event_id)
+        if verdict.status != "verified" or not (lo <= verdict.measured_ratio <= hi):
+            counters["event_transmission_verification_errors"] += 1
+    if event_service.verify_event(drought_ev.event_id).status != "verified":
+        counters["event_transmission_verification_errors"] += 1
+
+    declaration = dict(
+        commodity="soybean",
+        window_start=tariff.start_date,
+        window_end=tariff.end_date,
+        basis="desk_estimate",
+        decay_days=45,
+        declared_by="eval.desk",
+        declared_on=_date(2025, 8, 1),
+    )
+    forged = event_service.register_event(
+        **declaration,
+        event_class="tariff_change",
+        channel="import_flow",
+        peak_log_price_effect=0.60,
+        basis_detail="A wild claim over the real tariff window",
+        description="Forged tariff claim for the eval probe",
+    )
+    if event_service.verify_event(forged.event_id).status != "unverified":
+        counters["event_transmission_verification_errors"] += 1
+    if (
+        event_service.event_view(forged.event_id)["verification"]["status"]
+        != "unverified"
+    ):
+        counters["event_transmission_verification_errors"] += 1
+    wrong_sign = event_service.register_event(
+        **declaration,
+        event_class="demand_shock",
+        channel="modal_price",
+        peak_log_price_effect=-0.16,
+        basis_detail="A claim against the measured direction",
+        description="Wrong-sign claim over the tariff window",
+    )
+    if event_service.verify_event(wrong_sign.event_id).status != "unverified":
+        counters["event_transmission_verification_errors"] += 1
+    future = event_service.register_event(
+        event_class="demand_shock",
+        commodity="cumin",
+        window_start=_date(2026, 6, 1),
+        window_end=_date(2026, 6, 30),
+        channel="modal_price",
+        peak_log_price_effect=0.05,
+        basis="desk_estimate",
+        basis_detail="A declared future shock for the eval probe",
+        decay_days=5,
+        description="Declared future shock for the eval probe",
+        declared_by="eval.desk",
+        declared_on=_date(2026, 1, 3),
+    )
+    if event_service.verify_event(future.event_id).status != "not_measurable":
+        counters["event_transmission_verification_errors"] += 1
+
+    # The hand-computed fixture forecast: wheat, +0.10 declared
+    # over 2026-01-10..19 with decay 10, run as of 2025-12-31, so
+    # the window opens on forecast day 10.
+    wired_events = ForecastService(
+        store, OfflineModel(), events_provider=event_service.forecast_adjustments
+    )
+    clear = wired_events.run_forecast("wheat", "delhi_khari_baoli", _date(2025, 12, 31))
+    if (
+        any(d.events_adjustment != 0.0 for d in clear.days)
+        or wired_events.events_view(clear.forecast_id)["state"] != "clear"
+    ):
+        counters["event_forecast_line_errors"] += 1
+    fixture = event_service.register_event(
+        event_class="demand_shock",
+        commodity="wheat",
+        window_start=_date(2026, 1, 10),
+        window_end=_date(2026, 1, 19),
+        channel="modal_price",
+        peak_log_price_effect=0.10,
+        basis="desk_estimate",
+        basis_detail="Hand-computed fixture for the eval gate",
+        decay_days=10,
+        description="Hand-computed fixture event",
+        declared_by="eval.desk",
+        declared_on=_date(2026, 1, 3),
+    )
+    shocked_fc = wired_events.run_forecast(
+        "wheat", "delhi_khari_baoli", _date(2025, 12, 31)
+    )
+    fixture_view = wired_events.events_view(shocked_fc.forecast_id)
+    if (
+        fixture_view["state"] != "shocked"
+        or fixture_view["events_applied"] != [fixture.event_id]
+    ):
+        counters["event_forecast_line_errors"] += 1
+    else:
+        fixture_path = fixture_view["events"][0]["input_path"]
+        for idx, want in (
+            (0, 0.0), (9, 0.0333), (10, 0.0667), (11, 0.10),
+            (18, 0.10), (19, 0.09), (27, 0.01), (28, 0.0),
+        ):
+            if abs(fixture_path[idx] - want) > 1e-9:
+                counters["event_forecast_line_errors"] += 1
+        if any(v != 0.0 for v in fixture_path[28:]):
+            counters["event_forecast_line_errors"] += 1
+    counters["event_forecast_line_errors"] += len(verify_forecast(shocked_fc))
+    for day in shocked_fc.days:
+        parts = day.baseline + sum(day.contributions.values()) + day.events_adjustment
+        if abs(parts - day.p50) > 0.011:
+            counters["event_forecast_line_errors"] += 1
+
+    # Interval widening, exactly per pack: a shocked day's log band
+    # width is the plain run's times the stated factor; an
+    # untouched day's width does not move.
+    plain = run_engine(store, manifest, "wheat", "delhi_khari_baoli", _date(2025, 12, 31))
+    probe_path = [0.05 if 9 <= i <= 27 else 0.0 for i in range(90)]
+    widened = run_engine(
+        store,
+        manifest,
+        "wheat",
+        "delhi_khari_baoli",
+        _date(2025, 12, 31),
+        event_adjustments=[
+            EventAdjustment(
+                event_id="EVT-EVAL-WIDEN",
+                path=probe_path,
+                interval_widening=event_pack.interval_widening_factor,
+            )
+        ],
+    )
+    for idx, want in ((11, event_pack.interval_widening_factor), (60, 1.0)):
+        width_ratio = _math.log(
+            widened.days[idx].p90 / widened.days[idx].p50
+        ) / _math.log(plain.days[idx].p90 / plain.days[idx].p50)
+        if abs(width_ratio / want - 1.0) > 0.01:
+            counters["event_interval_widening_errors"] += 1
+
+    # Registration refusals.
+    refusal_base = dict(
+        event_class="demand_shock",
+        commodity="wheat",
+        window_start=_date(2026, 3, 1),
+        window_end=_date(2026, 3, 10),
+        channel="modal_price",
+        peak_log_price_effect=0.05,
+        basis="desk_estimate",
+        basis_detail="eval probe",
+        decay_days=5,
+        description="eval probe",
+        declared_by="eval.desk",
+        declared_on=_date(2026, 1, 3),
+    )
+    for refusal in (
+        {**refusal_base, "declared_by": "unknown"},
+        {**refusal_base, "channel": "weather_index"},
+        {**refusal_base, "peak_log_price_effect": 0.0},
+        {**refusal_base, "window_end": _date(2026, 2, 1)},
+        {**refusal_base, "basis": "model_said_so"},
+        {**refusal_base, "event_class": "price_control"},
+        {**refusal_base, "commodity": "rice_crude"},
+    ):
+        try:
+            event_service.register_event(**refusal)
+            counters["event_registration_errors"] += 1
+        except EventValidationError:
+            pass
+
+    # The what-happened view.
+    tariff_impact = event_service.impact(tariff_ev.event_id, "indore")
+    if (
+        tariff_impact.state != "measured"
+        or not (1.0 < tariff_impact.mean_price_ratio < 1.25)
+        or tariff_impact.peak_log_effect <= 0.10
+    ):
+        counters["event_impact_errors"] += 1
+    ban_impact = event_service.impact(ban_ev.event_id, "delhi_khari_baoli")
+    if ban_impact.state != "measured" or ban_impact.mean_price_ratio >= 1.0:
+        counters["event_impact_errors"] += 1
+    if event_service.impact(future.event_id, "unjha").state != "not_measurable":
+        counters["event_impact_errors"] += 1
+
+    print("Round 5 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]
