@@ -15,6 +15,7 @@ from datetime import date
 from pathlib import Path
 from typing import Protocol
 
+from fmcg_forecast.forecast.models import Commentary, Forecast, ForecastApproval
 from fmcg_forecast.migrations import apply_migrations
 from fmcg_forecast.models import EventRecord, Manifest, Observation
 
@@ -38,6 +39,17 @@ class Store(Protocol):
     def list_events(self, commodity: str | None = None) -> list[EventRecord]: ...
     def get_event(self, event_id: str) -> EventRecord | None: ...
     def row_counts(self) -> dict[str, int]: ...
+    # -- forecast artefacts (R2) --------------------------------------
+    def insert_forecast(self, forecast: Forecast) -> None: ...
+    def get_forecast(self, forecast_id: str) -> Forecast | None: ...
+    def list_forecasts(
+        self, commodity: str | None = None, market: str | None = None
+    ) -> list[Forecast]: ...
+    def set_forecast_status(self, forecast_id: str, status: str) -> None: ...
+    def insert_approval(self, approval: ForecastApproval) -> None: ...
+    def get_approval(self, forecast_id: str) -> ForecastApproval | None: ...
+    def save_commentary(self, commentary: Commentary) -> None: ...
+    def get_commentary(self, forecast_id: str) -> Commentary | None: ...
     def close(self) -> None: ...
 
 
@@ -198,6 +210,135 @@ class SqlStore:
             "SELECT commodity, COUNT(*) FROM observations GROUP BY commodity ORDER BY commodity"
         )
         return {r[0]: int(r[1]) for r in cur.fetchall()}
+
+    # -- forecast artefacts (R2) ---------------------------------------
+    # Payloads are stored without their lifecycle status: the status
+    # column is the state of record, flipped only by set_forecast_status
+    # when an approval act lands. The payload itself is never rewritten,
+    # so a stored decomposition cannot drift from what was approved.
+
+    def insert_forecast(self, forecast: Forecast) -> None:
+        sql = self._q(
+            "INSERT INTO forecasts (forecast_id, commodity, market, as_of, "
+            "status, engine_version, payload) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                forecast.forecast_id,
+                forecast.commodity,
+                forecast.market,
+                self._date_param(forecast.as_of),
+                forecast.status,
+                forecast.engine_version,
+                forecast.model_dump_json(exclude={"status"}),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def _forecast_from_row(self, row) -> Forecast:
+        payload = json.loads(row[6])
+        payload["status"] = row[4]
+        return Forecast.model_validate(payload)
+
+    def get_forecast(self, forecast_id: str) -> Forecast | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT forecast_id, commodity, market, as_of, status, "
+                "engine_version, payload FROM forecasts WHERE forecast_id = ?"
+            ),
+            (forecast_id,),
+        )
+        row = cur.fetchone()
+        return self._forecast_from_row(row) if row else None
+
+    def list_forecasts(
+        self, commodity: str | None = None, market: str | None = None
+    ) -> list[Forecast]:
+        sql = (
+            "SELECT forecast_id, commodity, market, as_of, status, "
+            "engine_version, payload FROM forecasts"
+        )
+        params: list = []
+        clauses = []
+        if commodity is not None:
+            clauses.append("commodity = ?")
+            params.append(commodity)
+        if market is not None:
+            clauses.append("market = ?")
+            params.append(market)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY as_of, forecast_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [self._forecast_from_row(r) for r in cur.fetchall()]
+
+    def set_forecast_status(self, forecast_id: str, status: str) -> None:
+        self._conn.execute(
+            self._q("UPDATE forecasts SET status = ? WHERE forecast_id = ?"),
+            (status, forecast_id),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def insert_approval(self, approval: ForecastApproval) -> None:
+        sql = self._q(
+            "INSERT INTO forecast_approvals (approval_id, forecast_id, "
+            "approver, role, decided_on, payload) VALUES (?, ?, ?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                approval.approval_id,
+                approval.forecast_id,
+                approval.approver,
+                approval.role,
+                self._date_param(approval.decided_on),
+                approval.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_approval(self, forecast_id: str) -> ForecastApproval | None:
+        cur = self._conn.execute(
+            self._q("SELECT payload FROM forecast_approvals WHERE forecast_id = ?"),
+            (forecast_id,),
+        )
+        row = cur.fetchone()
+        return ForecastApproval.model_validate(json.loads(row[0])) if row else None
+
+    def save_commentary(self, commentary: Commentary) -> None:
+        if self.dialect == "postgres":
+            sql = (
+                "INSERT INTO commentaries (forecast_id, model_profile, payload) "
+                "VALUES (%s, %s, %s) ON CONFLICT (forecast_id) DO UPDATE "
+                "SET model_profile = EXCLUDED.model_profile, payload = EXCLUDED.payload"
+            )
+        else:
+            sql = (
+                "INSERT OR REPLACE INTO commentaries (forecast_id, model_profile, "
+                "payload) VALUES (?, ?, ?)"
+            )
+        self._conn.execute(
+            sql,
+            (
+                commentary.forecast_id,
+                commentary.model_profile,
+                commentary.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_commentary(self, forecast_id: str) -> Commentary | None:
+        cur = self._conn.execute(
+            self._q("SELECT payload FROM commentaries WHERE forecast_id = ?"),
+            (forecast_id,),
+        )
+        row = cur.fetchone()
+        return Commentary.model_validate(json.loads(row[0])) if row else None
 
     def close(self) -> None:
         self._conn.close()
