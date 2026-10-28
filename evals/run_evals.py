@@ -117,6 +117,26 @@ zero-tolerance:
   measured, its mean effect outside the planted direction, or a
   future event's impact reading as measured.
 
+Round 6 counters (scenario studio, Law 5), also zero-tolerance:
+
+- scenario_parse_errors: a parse fixture whose lever set differs
+  from the stated grammar's, a refusal fixture that parses, or a
+  service-level refusal naming the wrong clause.
+- scenario_bounds_errors: a lever at its pack bound refused, or
+  a lever beyond its bound accepted.
+- scenario_fork_errors: the fork stored as a desk forecast, a
+  stored run the verifier flags, a base that does not apply the
+  declared event, or a fork baseline that moved.
+- scenario_diff_errors: per-day diff parts that do not
+  re-perform to the stated driver totals or the P50 total.
+- scenario_event_errors: an extension whose window end is not
+  the source's plus the stated days, a scenario event written
+  into the registry, or the registry record itself moved.
+- scenario_adoption_errors: an adopted view before the act, a
+  placeholder adopter accepted, a re-adoption not refused as a
+  state error, a supersession link wrong, or the base forecast
+  artefact differing by a byte after all scenario activity.
+
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
 
@@ -149,6 +169,7 @@ def truth_isolation_violations() -> int:
         list((base / "forecast").rglob("*.py"))
         + list((base / "backtest").rglob("*.py"))
         + list((base / "events").rglob("*.py"))
+        + list((base / "scenarios").rglob("*.py"))
     )
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -210,6 +231,12 @@ def main() -> int:
         "event_interval_widening_errors": 0,
         "event_registration_errors": 0,
         "event_impact_errors": 0,
+        "scenario_parse_errors": 0,
+        "scenario_bounds_errors": 0,
+        "scenario_fork_errors": 0,
+        "scenario_diff_errors": 0,
+        "scenario_event_errors": 0,
+        "scenario_adoption_errors": 0,
     }
 
     # --- planted events, measured seasonally-matched ---------------
@@ -960,7 +987,286 @@ def main() -> int:
     if event_service.impact(future.event_id, "unjha").state != "not_measurable":
         counters["event_impact_errors"] += 1
 
-    print("Round 5 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry)")
+    # --- the scenario studio (R6, Law 5) ----------------------------
+    import sqlite3 as _sqlite3
+    from datetime import timedelta as _timedelta
+
+    from fmcg_forecast.forecast.service import ForecastService as _ForecastService
+    from fmcg_forecast.modelport import OfflineModel as _OfflineModel
+    from fmcg_forecast.scenarios.diff import compute_diff as scenario_compute_diff
+    from fmcg_forecast.scenarios.models import LeverApplication
+    from fmcg_forecast.scenarios.pack import load_scenario_pack
+    from fmcg_forecast.scenarios.parse import (
+        ParseRefusal as ScenarioParseRefusal,
+    )
+    from fmcg_forecast.scenarios.parse import (
+        parse_request_text as scenario_parse_text,
+    )
+    from fmcg_forecast.scenarios.service import (
+        AdoptionStateError,
+        AdoptionValidationError,
+        ScenarioParseError,
+        ScenarioService,
+        ScenarioValidationError,
+    )
+
+    scenario_pack = load_scenario_pack()
+    scenario_forecast_service = _ForecastService(
+        store,
+        _OfflineModel(),
+        sentiment_provider=sentiment.forecast_input,
+        sentiment_claim_verifier=sentiment.verify_claims,
+        events_provider=event_service.forecast_adjustments,
+    )
+    scenario_service = ScenarioService(
+        store,
+        _OfflineModel(),
+        scenario_forecast_service,
+        event_service,
+        sentiment_provider=sentiment.forecast_input,
+    )
+    eval_tariff = event_service.register_event(
+        event_class="tariff_change",
+        commodity="soybean",
+        window_start=_date(2026, 2, 1),
+        window_end=_date(2026, 2, 28),
+        channel="import_flow",
+        peak_log_price_effect=0.08,
+        basis="announced_measure",
+        basis_detail="Import duty on oilseeds raised by 10 "
+        "percentage points in a ministry notification",
+        decay_days=20,
+        description="Import tariff increase on oilseeds for February",
+        declared_by="eval.desk",
+        declared_on=_date(2026, 1, 2),
+    )
+    scenario_base = scenario_forecast_service.run_forecast("soybean", "indore")
+    if eval_tariff.event_id not in scenario_base.method.events_applied:
+        counters["scenario_fork_errors"] += 1
+
+    def _raw_base_payload() -> tuple[str, str] | None:
+        conn = _sqlite3.connect(str(tmp / "evals.db"))
+        try:
+            return conn.execute(
+                "SELECT payload, status FROM forecasts WHERE forecast_id = ?",
+                (scenario_base.forecast_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+
+    base_payload_before = _raw_base_payload()
+
+    # Parse fixtures: exact lever sets, and refusals that name the part.
+    ctx = [{"event_id": eval_tariff.event_id, "event_class": "tariff_change"}]
+    good_fixtures = {
+        "what if arrivals drop 10% and the tariff stays another month?": [
+            ("arrivals_shift_pct", -10.0, None, None),
+            ("event_extension", None, eval_tariff.event_id, 30),
+        ],
+        "stock cover falls by 12 days": [
+            ("stock_cover_days", -12.0, None, None)
+        ],
+        "imports rise 20%": [("trade_flow_shift_pct", 20.0, None, None)],
+        "weather index deviation of -0.3": [
+            ("weather_deviation", -0.3, None, None)
+        ],
+        "sentiment to -0.8": [("sentiment_override", -0.8, None, None)],
+        "a new tariff pushes prices up by 8% for 30 days": [
+            ("hypothetical_event", 8.0, None, None)
+        ],
+    }
+    for text, expected in good_fixtures.items():
+        try:
+            levers = scenario_parse_text(text, events=ctx, pack=scenario_pack)
+            got = [
+                (l.lever, l.value, l.event_id, l.extra_days) for l in levers
+            ]
+            if got != expected:
+                counters["scenario_parse_errors"] += 1
+        except ScenarioParseRefusal:
+            counters["scenario_parse_errors"] += 1
+    for text in (
+        "what if the monsoon fails completely?",
+        "arrivals drop 10% and arrivals rise 5%",
+        "prices triple overnight",
+        "the banana stays another month",
+    ):
+        try:
+            scenario_parse_text(text, events=ctx, pack=scenario_pack)
+            counters["scenario_parse_errors"] += 1
+        except ScenarioParseRefusal:
+            pass
+    try:
+        scenario_service.parse_request(
+            "soybean",
+            "indore",
+            "what if the monsoon fails completely?",
+            base_forecast_id=scenario_base.forecast_id,
+        )
+        counters["scenario_parse_errors"] += 1
+    except ScenarioParseError as refusal:
+        if refusal.clause != "the monsoon fails completely":
+            counters["scenario_parse_errors"] += 1
+
+    # Bounds: each lever at its bound validates, beyond it refuses.
+    bound_probes = [
+        ("arrivals_shift_pct", 40.0, 41.0),
+        ("arrivals_shift_pct", -40.0, -41.0),
+        ("stock_cover_days", 30.0, 31.0),
+        ("trade_flow_shift_pct", 60.0, 61.0),
+        ("weather_deviation", 0.5, 0.6),
+        ("sentiment_override", -1.0, -1.1),
+    ]
+    for lever_name, at_bound, beyond in bound_probes:
+        try:
+            scenario_service.validate_levers(
+                [LeverApplication(lever=lever_name, value=at_bound)]
+            )
+        except ScenarioValidationError:
+            counters["scenario_bounds_errors"] += 1
+        try:
+            scenario_service.validate_levers(
+                [LeverApplication(lever=lever_name, value=beyond)]
+            )
+            counters["scenario_bounds_errors"] += 1
+        except ScenarioValidationError:
+            pass
+
+    # The fork: pinned, identity-exact, base untouched.
+    scenario_request = scenario_service.parse_request(
+        "soybean",
+        "indore",
+        "what if arrivals drop 10% and the tariff stays another month?",
+        base_forecast_id=scenario_base.forecast_id,
+    )
+    scenario_run = scenario_service.run_scenario(
+        scenario_request.request_id,
+        scenario_base.forecast_id,
+        "eval.desk",
+        _date(2026, 1, 3),
+    )
+    if scenario_run.status != "draft":
+        counters["scenario_fork_errors"] += 1
+    if store.get_forecast(scenario_run.fork_forecast_id) is not None:
+        counters["scenario_fork_errors"] += 1
+    if scenario_service.verify_stored(scenario_run.scenario_id):
+        counters["scenario_fork_errors"] += 1
+    for base_day, fork_day in zip(
+        scenario_base.days, scenario_run.fork.days
+    ):
+        if base_day.baseline != fork_day.baseline:
+            counters["scenario_fork_errors"] += 1
+            break
+
+    # The diff: per-day integer-paise identity, totals exact.
+    diff, diff_problems = scenario_compute_diff(
+        scenario_run.scenario_id, scenario_base, scenario_run.fork
+    )
+    if diff_problems:
+        counters["scenario_diff_errors"] += 1
+    totals_paise = {
+        driver: sum(
+            round(day.contributions[driver] * 100) for day in diff.days
+        )
+        for driver in (
+            "arrivals",
+            "stock_level",
+            "trade_flow",
+            "weather_index",
+            "sentiment",
+        )
+    }
+    for driver, paise in totals_paise.items():
+        if round(diff.driver_totals[driver] * 100) != paise:
+            counters["scenario_diff_errors"] += 1
+    events_paise = sum(round(d.events_adjustment * 100) for d in diff.days)
+    if round(diff.events_total * 100) != events_paise:
+        counters["scenario_diff_errors"] += 1
+    if round(diff.p50_total * 100) != sum(totals_paise.values()) + events_paise:
+        counters["scenario_diff_errors"] += 1
+
+    # Scenario events stay scenario-local; the registry never moves.
+    if len(scenario_run.scenario_events) != 1:
+        counters["scenario_event_errors"] += 1
+    else:
+        extended_ev = scenario_run.scenario_events[0]
+        if extended_ev.window_end != eval_tariff.window_end + _timedelta(days=30):
+            counters["scenario_event_errors"] += 1
+        if store.get_market_event(extended_ev.event_id) is not None:
+            counters["scenario_event_errors"] += 1
+        if event_service.get_event(
+            eval_tariff.event_id
+        ).window_end != eval_tariff.window_end:
+            counters["scenario_event_errors"] += 1
+
+    # The adoption gate.
+    if scenario_service.adopted_view("soybean", "indore")["state"] != "none":
+        counters["scenario_adoption_errors"] += 1
+    try:
+        scenario_service.adopt(
+            scenario_run.scenario_id,
+            "unknown",
+            "Head of Trading Desk",
+            _date(2026, 1, 4),
+        )
+        counters["scenario_adoption_errors"] += 1
+    except AdoptionValidationError:
+        pass
+    act = scenario_service.adopt(
+        scenario_run.scenario_id,
+        "eval.desk.head",
+        "Head of Trading Desk",
+        _date(2026, 1, 4),
+    )
+    if act.supersedes_scenario_id is not None:
+        counters["scenario_adoption_errors"] += 1
+    adopted = scenario_service.adopted_view("soybean", "indore")
+    if (
+        adopted["state"] != "adopted"
+        or adopted["scenario"]["view_kind"] != "adopted_scenario"
+    ):
+        counters["scenario_adoption_errors"] += 1
+    try:
+        scenario_service.adopt(
+            scenario_run.scenario_id,
+            "eval.desk.head",
+            "Head of Trading Desk",
+            _date(2026, 1, 5),
+        )
+        counters["scenario_adoption_errors"] += 1
+    except AdoptionStateError:
+        pass
+    second_request = scenario_service.create_request(
+        "soybean",
+        "indore",
+        [LeverApplication(lever="arrivals_shift_pct", value=-15.0)],
+    )
+    second_run = scenario_service.run_scenario(
+        second_request.request_id,
+        scenario_base.forecast_id,
+        "eval.desk",
+        _date(2026, 1, 3),
+    )
+    act2 = scenario_service.adopt(
+        second_run.scenario_id,
+        "eval.desk.head",
+        "Head of Trading Desk",
+        _date(2026, 1, 6),
+    )
+    if act2.supersedes_scenario_id != scenario_run.scenario_id:
+        counters["scenario_adoption_errors"] += 1
+    if scenario_service.get_scenario(scenario_run.scenario_id).status != (
+        "superseded"
+    ):
+        counters["scenario_adoption_errors"] += 1
+
+    # After all scenario activity, the base artefact is byte-identical.
+    if _raw_base_payload() != base_payload_before:
+        counters["scenario_adoption_errors"] += 1
+    if scenario_forecast_service.get_forecast(scenario_base.forecast_id).status != "draft":
+        counters["scenario_adoption_errors"] += 1
+
+    print("Round 6 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]
