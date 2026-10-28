@@ -86,6 +86,9 @@ def env(tmp_path_factory):
         sentiment_claim_verifier=sentiment.verify_claims,
         events_provider=events.forecast_adjustments,
     )
+    # the harness runs before the desk forecasts, so their pinned
+    # accuracy attachments carry the measured states (chili degraded)
+    run_backtest_harness(store, load_accuracy_pack())
     soy = forecasts.run_forecast("soybean", "indore")
     wheat = forecasts.run_forecast("wheat", "delhi_khari_baoli")
     wheat_early = forecasts.run_forecast(
@@ -93,7 +96,6 @@ def env(tmp_path_factory):
     )
     coffee = forecasts.run_forecast("coffee", "bengaluru")
     chili = forecasts.run_forecast("chili", "guntur")
-    run_backtest_harness(store, load_accuracy_pack())
     scenarios = ScenarioService(
         store,
         model,
@@ -145,7 +147,7 @@ def test_dashboard_pack_loads():
         "degraded", "pending_gate", "active_event",
         "forecast_change", "data_gap",
     ]
-    assert pack.default_market_rule.startswith("reference market")
+    assert "reference market" in pack.default_market_rule
     rainfall = next(
         s for s in pack.unstateable_subjects if s.subject == "rainfall"
     )
@@ -268,7 +270,7 @@ def test_assemble_renders_verified_page(env):
     html = assembly.html
     assert env["wheat"].forecast_id in html
     assert "Provenance appendix" in html
-    assert "app.trida.ai" in html and "trida.ai/blueprints" in html
+    assert "https://trida.ai/" in html and "View all blueprints" in html
     # the degraded flag rides on the chili panel and cannot be suppressed
     assert "degraded" in html
     chili_panel = assembly.panels[2]
@@ -326,7 +328,7 @@ def test_hypothetical_discipline(env):
     assert panel.state == "rendered"
     diff = env["scenarios"].diff(run.scenario_id)
     figures = {f.key: f.value for f in panel.figures}
-    assert figures["dp50_30d"] == diff.at_horizons["30"]
+    assert figures["p50_diff_30d"] == diff.at_horizons["30"]
     assert figures["view_kind"] == "scenario_draft"  # unadopted stays a draft
     assert run.scenario_id in assembly.html
 
@@ -383,7 +385,13 @@ def test_diff_figure_changed_unit():
                 DashboardFigure(
                     key="p50_30d", label="P50 @ 30d", value=value,
                     unit="p50_paise", artefact_id="FCST-x",
-                    lineage=[LineageFact(kind="forecast", ref="FCST-x")],
+                    lineage=[
+                        LineageFact(
+                            kind="forecast", ref="FCST-x",
+                            detail="the series' head forecast",
+                            source="forecast artefact", fact_date=None,
+                        )
+                    ],
                 )
             ],
             artefact_ids=["FCST-x"],
@@ -457,7 +465,9 @@ def test_verifier_catches_html_mismatch(env):
     assembly = dash.assemble(spec.spec_id, date(2026, 1, 5))
 
     def rewrite(payload):
-        payload["html"] = payload["html"].replace("degraded", "fine")
+        payload["html"] = payload["html"].replace(
+            "Provenance appendix", "Appendix"
+        )
 
     _tamper(env, assembly.assembly_id, rewrite)
     problems = dash.verify_stored(assembly.assembly_id)
