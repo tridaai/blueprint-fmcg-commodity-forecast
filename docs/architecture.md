@@ -26,8 +26,8 @@
 | Truth store | `truth.py` | The sealed future path. Written once by the load path; read by graders and the eval gate. The forecast package is forbidden from importing it — enforced by an AST scan in the tests and the eval gate. |
 | Migrations | `migrations.py`, `migrations/{sqlite,postgres}/` | Numbered SQL files + a ledger table; idempotent runner shared by both stores. |
 | Ingest workflow | `workflow.py` | LangGraph graph: `generate → persist → verify`. Idempotent at the workflow level (same seed + digest verifies and stops); the store stays insert-only underneath. |
-| Model port | `modelport.py` | Language only (Law 1): commentary drafting, sentiment extraction (`extract_sentiment`, R4) and scenario intake (`parse_scenario`, R6). Offline deterministic default (the pack's stated lexicon rule for extraction; the scenario pack's stated grammar for intake); hosted profiles refuse loudly until configured. |
-| API | `api.py` | Read surfaces: `/series`, `/events`, `/manifest`, `/coverage/{commodity}`, `/catalogue`, `/health`, `/readiness`; forecast surface (R2): `/forecasts/run`, `/forecasts/{id}` + `/contributions`, `/verify`, `/approve`, `/approval`, `/commentary`; accuracy surface (R3): `/backtests/run`, `/backtests` + `/{id}`, `/accuracy`, `/accuracy/{commodity}/{market}/{horizon}`, `/forecasts/{id}/accuracy`; sentiment surface (R4): `/sentiment/run`, `/sentiment/manifest`, `/sentiment/items` + `/{id}`, `/sentiment/extractions`, `/sentiment/index/{commodity}` + `/{week}`, `/sentiment/verify`, `/forecasts/{id}/sentiment`; event registry (R5): `POST /market-events`, `POST /market-events/seed-historical`, `GET /market-events` + `/{id}` (verdict on its face), `/{id}/verify`, `/{id}/impact`, `/market-events/verify`, `/forecasts/{id}/events` — with the registry wired into API forecast runs; scenario studio (R6): `GET /scenarios/pack`, `POST /scenarios/requests` + `/structured`, `POST /scenarios`, `GET /scenarios` + `/{id}`, `/{id}/diff`, `/{id}/verify`, `POST /{id}/adopt`, `GET /{id}/adoption`, `GET /scenarios/adopted/{commodity}/{market}` — mirrored by the `fmcg-agent-scenarios` CLI. JSON logs + request id on every response. |
+| Model port | `modelport.py` | Language only (Law 1): commentary drafting, sentiment extraction (`extract_sentiment`, R4), scenario intake (`parse_scenario`, R6) and dashboard intake (`parse_dashboard`, R7). Offline deterministic default (the pack's stated lexicon rule for extraction; the scenario pack's stated grammar for intake); hosted profiles refuse loudly until configured. |
+| API | `api.py` | Read surfaces: `/series`, `/events`, `/manifest`, `/coverage/{commodity}`, `/catalogue`, `/health`, `/readiness`; forecast surface (R2): `/forecasts/run`, `/forecasts/{id}` + `/contributions`, `/verify`, `/approve`, `/approval`, `/commentary`; accuracy surface (R3): `/backtests/run`, `/backtests` + `/{id}`, `/accuracy`, `/accuracy/{commodity}/{market}/{horizon}`, `/forecasts/{id}/accuracy`; sentiment surface (R4): `/sentiment/run`, `/sentiment/manifest`, `/sentiment/items` + `/{id}`, `/sentiment/extractions`, `/sentiment/index/{commodity}` + `/{week}`, `/sentiment/verify`, `/forecasts/{id}/sentiment`; event registry (R5): `POST /market-events`, `POST /market-events/seed-historical`, `GET /market-events` + `/{id}` (verdict on its face), `/{id}/verify`, `/{id}/impact`, `/market-events/verify`, `/forecasts/{id}/events` — with the registry wired into API forecast runs; scenario studio (R6): `GET /scenarios/pack`, `POST /scenarios/requests` + `/structured`, `POST /scenarios`, `GET /scenarios` + `/{id}`, `/{id}/diff`, `/{id}/verify`, `POST /{id}/adopt`, `GET /{id}/adoption`, `GET /scenarios/adopted/{commodity}/{market}` — mirrored by the `fmcg-agent-scenarios` CLI; dashboards (R7): `GET /dashboards/pack`, `POST /dashboards/ask`, `GET /dashboards/specs` + `/{id}`, `POST /dashboards/specs/{id}/save`, `GET /dashboards/views`, `POST /dashboards/specs/{id}/assemble`, `GET /dashboards/assemblies/{id}` + `/html` + `/appendix` + `/verify`, `GET /board` + `/board/html` — mirrored by the `fmcg-agent-dashboards` CLI. JSON logs + request id on every response. |
 | Forecast package | `forecast/` | The engine (R2). Its `__init__` states the isolation law it is graded on: the package reads observations through the store port only, never the truth store. |
 | Forecast engine | `forecast/engine.py` | The stated method: OLS baseline (trend + day-of-year seasonality on log price); baseline residuals regressed on standardised driver inputs (arrivals = z(log arrivals), stock = z(level), trade = z(imports − exports), weather = raw); driver paths projected as last input × persistence^h; sequential (telescoping) attribution in the order arrivals → stock → trade → weather → sentiment → events, so the decomposition sums to the total to the paisa; intervals from rolling 365-observation residual quantiles, AR-propagated and widened by the sparsity multiplier √(calendar/observed days). Refuses an `as_of` inside the sealed window unless invoked via the backtest path; refuses thin history (< 250 observations or < 730 days span) by naming it. R4: accepts a sentiment input (the weekly index carried daily, with the pack's estimation floors riding on it) — estimated like any other driver when the floors are met, a named zero `not_estimable` line (also named in `missing_drivers`) when they are not, and byte-identical pre-R4 behaviour when no input is supplied. R5: event adjustments telescope separately in the order given, each event's own INR path recorded on the events line (`per_event`), and an adjustment's interval widening factor multiplies the band growth on exactly the days its path is non-zero; duplicate events and narrowing factors are refused. R6: driver shifts (`DriverShift`: add / add_clip) are applied to the built input paths before attribution — a shifted line records a `scenario_shift` marker in its input summary — and a sentiment start override replaces the sentiment path's first input (refused when no estimated sentiment line exists); a run with no shifts is byte-identical to the pre-R6 engine. |
 | Forecast verifier | `forecast/verify.py` | Re-performs a stored artefact: re-adds every day, checks line paths against day values, horizon summaries against day rows, interval ordering, and the content address. Any tamper fails here. |
@@ -54,6 +54,14 @@
 | Scenario diff | `scenarios/diff.py` | The fork-vs-base difference in integer paise: per driver per day, plus the events difference; the parts re-add to the P50 difference on every day, and the baseline must be identical on both sides or the fork is not a fork. |
 | Scenario verifier | `scenarios/verify.py` | Artefact-level re-performance of a stored run: content addresses, both forecasts through the forecast verifier, the diff identity, every shift recomputed from store + pack, every scenario event's path and transmission re-performed. (Not an engine re-run: the accuracy ledger may legitimately move between run and verify.) |
 | Scenario service | `scenarios/service.py` | The studio workflow: parse (model port, pack-validated) and structured intake; the pinned fork — the base's event adjustments re-derived from the insert-only registry, scenario events appended in lever order, the engine re-run with the shifts — with the fork living on the run artefact, never in the desk's forecast record; the diff and labelled reads (base / scenario_draft / adopted_scenario / superseded_scenario); and the adoption act — named adopter + role, placeholders refused, supersession by link, state errors on re-adoption. The base artefact is never mutated. |
+| Dashboard pack | `dashboards/pack.py` | Law 6 as versioned data: the panel catalogue (forecast / accuracy / sentiment / events / scenario-diff — each with its stated figures and source family), the head rule that picks a series' current forecast, the prompt grammar's vocabulary (commodity aliases, market words, the subjects the catalogue honestly cannot state and the named gap each becomes), and the morning board's section order. Fail-closed loader; every spec, assembly and board names its pack version. |
+| Dashboard grammar | `dashboards/parse.py` | The pack's stated grammar performed offline (the model port's `parse_dashboard`). Clause by clause, each clause becomes one catalogue panel or a named gap panel — never dropped, never improvised; a scenario panel exists only when the prompt names the scenario (by id, or as a series' adopted scenario). |
+| Dashboard lineage | `dashboards/lineage.py` | The provenance walk (F20-DR3) built from the store alone: figure -> artefact -> input facts -> source + date, terminating at stored facts — observation series (with row count and last date), sentiment items, event declarations, the dataset manifest. |
+| Dashboard assembler | `dashboards/assemble.py` | Panel resolution: each spec panel re-resolves to the current head of its artefact family, figures are read from the artefacts, replaced bindings are named as superseded, missing data becomes a rendered gap; and the re-run diff (figure changes, binding supersessions, gap<->rendered flips) is computed against the previous assembly. |
+| Dashboard verifier | `dashboards/verify.py` | Whole-dashboard re-performance before a page may exist or be trusted: panels re-resolve and compare figure for figure, the family verifiers re-perform the artefacts behind them, every figure's lineage walk is re-checked against the store (a figure without a complete walk cannot render), and the stored HTML re-renders byte-for-byte. One problem refuses the whole dashboard. |
+| Dashboard renderer | `dashboards/render.py` | One static HTML file per dashboard / board — inline CSS, light theme, no JavaScript — a pure function of the stored artefacts: panels with artefact ids on every figure, the diff section, and the provenance appendix walking every figure to its facts. |
+| Desk board | `dashboards/board.py` | The morning exception inbox (F20-OW1) computed from artefacts only: degraded series, pending approval / adoption gates, active declared events (verdict on the row's face), forecast changes between a series' two most recent run dates, and named data gaps — ranked by the pack's section order, every row linked to its artefact; a clean series does not appear. The board is itself a content-addressed artefact. |
+| Dashboard service | `dashboards/service.py` | The surface workflow every caller shares: ask (model port, pack-validated, ask-time bindings recorded), saved views (names pointing at specs), assembly (re-resolve -> diff -> render -> verify -> store; an identical re-assembly returns the stored artefact), the appendix and verify reads, and the board. Mirrored by the `fmcg-agent-dashboards` CLI. |
 
 ## Data design
 
@@ -102,6 +110,20 @@
   act). Scenario-local events reuse the `MarketEvent` artefact
   with `origin = "scenario"` and are stored only on the run —
   the registry table is never written by the studio.
+- A **dashboard** is three artefacts plus the board (migration
+  0007): the **spec** (the prompt, the asker, and the stated
+  panel set with its ask-time artefact bindings — gap panels
+  included, so an unanswerable ask is on the record, not
+  dropped), the **view** (a name pointing at a spec; re-running
+  the view is a fresh assembly, never a copy of an old page),
+  the **assembly** (the panels as resolved against the store at
+  assembly time, the computed diff against the previous
+  assembly, and the rendered page — stored only after the
+  verifier re-performs it whole), and the **desk board** (the
+  morning exception rows for a date, content-addressed like
+  everything else). Nothing on any of them is computed at read
+  time except the board's HTML, which re-renders from the
+  stored rows.
 
 ## The pipeline the rounds build
 
@@ -131,8 +153,16 @@ LangGraph state machine whose transitions are stored artefacts:
   with levers applied to driver inputs (identity intact, base
   never mutated), the integer-paise diff, and adoption only by
   a named human act with supersession by link.
-- **publish** (R7+): dashboards assembled from artefacts only (Law 6),
-  behind a named human approval act.
+- **publish** (R7, landed): dashboards assembled from artefacts
+  only (Law 6) — a plain-language prompt compiles through the
+  model port to a stated spec (catalogue panels or named gap
+  panels), assemblies re-resolve to current artefact heads and
+  are verified whole (figures re-performed, every lineage walk
+  re-checked to stored facts, HTML byte-exact) before they are
+  stored, re-runs carry a computed diff, and the morning desk
+  board ranks the day's exceptions — degraded series, pending
+  gates, active events, forecast changes, named gaps — each row
+  an artefact.
 
 ## Failure posture
 

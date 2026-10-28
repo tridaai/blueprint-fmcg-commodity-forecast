@@ -379,6 +379,71 @@ and a frozen `constraints.txt` · multi-stage non-root Docker.
   lever is refused, naming the missing line), and adoption by
   anyone but a named human act.
 
+## What Round 7 adds
+
+- **Prompt-to-dashboard** — a plain-language prompt ("wheat
+  forecast at delhi and soybean sentiment and the coffee stock
+  position") goes through the model port — offline, the
+  **dashboard pack's** stated deterministic grammar; hosted,
+  fail-closed — and compiles to a stated, content-addressed
+  **dashboard spec** artefact: panels, each bound at ask time to
+  the artefacts behind it. The pack states the whole vocabulary:
+  five panel kinds (forecast paths, measured accuracy, the
+  sentiment index, declared events, scenario diffs), the head
+  rule that picks a series' current forecast, the reference-market
+  default, and the subjects the catalogue honestly cannot state.
+  A clause asking for a figure that does not exist — rainfall,
+  a standalone stock or arrivals figure, an unknown commodity —
+  becomes a **named gap panel** on the spec and on the rendered
+  page: never an invented number, never a silently dropped
+  request. R6's hypothetical discipline carries into the grammar:
+  a scenario panel exists only when the prompt names the scenario,
+  by id or as a series' adopted scenario.
+- **Artefact-only rendering, verified before it exists** — a spec
+  assembles by re-resolving every panel to the current head of
+  its artefact family and reading figures off the artefacts. The
+  candidate page then passes an assembler-level verifier —
+  panels re-resolve and compare figure for figure, each family's
+  own verifier re-performs the artefacts behind them, the stored
+  HTML must re-render byte-for-byte — before it is stored. One
+  mismatch refuses the whole dashboard; nothing partial exists.
+  Specs save as **named views** (a name pointing at a spec, not a
+  copy) and re-run against fresh data: an identical re-assembly
+  returns the stored artefact, and a re-run whose inputs have
+  superseded carries a **computed diff** — figure changes,
+  binding supersessions, gap↔rendered flips.
+- **The provenance appendix** — every dashboard page carries an
+  appendix, and every figure in it walks figure → artefact id →
+  input facts → source + date, terminating at stored facts:
+  observation series (with row count and last date), sentiment
+  items, event declarations, the dataset manifest. The verifier
+  re-checks every walk against the store; a figure without a
+  complete lineage cannot render — the dashboard refuses,
+  naming the figure. This is the trust feature that lets a desk
+  head defend a number in a meeting.
+- **The morning desk board** — one opening screen, itself a
+  content-addressed artefact derived from artefacts only:
+  degraded series first (chili/Guntur appears), then pending
+  gates (draft forecasts awaiting approval, draft scenarios
+  awaiting adoption), active declared events with their verdict
+  on the row's face, forecast changes between a series' two most
+  recent run dates, and named data gaps (coffee's, on its head
+  forecast). Ranked exceptions, not a chart gallery; every row
+  links to its artefact id; a clean series does not appear.
+- **Surfaces** — migration 0007 (both dialects); `GET
+  /dashboards/pack`, `POST /dashboards/ask`, `GET
+  /dashboards/specs` + `/{id}`, `POST /dashboards/specs/{id}/save`,
+  `GET /dashboards/views`, `POST /dashboards/specs/{id}/assemble`,
+  `GET /dashboards/assemblies/{id}` + `/html` + `/appendix` +
+  `/verify`, `GET /board` + `/board/html`; the
+  `fmcg-agent-dashboards` CLI with the same verbs (ask, specs,
+  save, views, assemble, show, appendix, verify, board,
+  board-html); the demo walks prompt → dashboard → appendix and
+  the morning board. What dashboards still cannot do: a panel
+  kind outside the pack's catalogue, a figure no artefact
+  carries, and a "clean" read of a degraded series — the flag
+  rides on every surface, API included.
+
 ## Honest status
 
 - **Built and gated in R1:** the spine, generator + manifest, store port +
@@ -446,9 +511,22 @@ and a frozen `constraints.txt` · multi-stage non-root Docker.
   bounds, fork pinning, diff sums, scenario-event locality and
   adoption discipline; the truth-isolation scan now covers the
   scenarios package too.
-- **Not yet built:** prompt-to-dashboard (R7), the console (R13).
-  The round map runs to R20 and continues past it until the
-  production bar is met.
+- **Built and gated in R7:** the dashboard pack (panel
+  catalogue, head rule, grammar vocabulary, board sections as
+  versioned data), the deterministic prompt grammar (catalogue
+  panels or named gap panels; scenarios rendered only when
+  named), specs + saved views + verified assembly (re-resolution,
+  family re-performance, the lineage walk, byte-exact
+  re-rendering — any problem refuses the whole dashboard), the
+  computed re-run diff, the provenance appendix (100% of figures
+  walked to stored facts), the morning desk board as an
+  artefact, migration 0007, dashboard + board API surfaces and
+  the `fmcg-agent-dashboards` CLI, demo walk. Eval gate v7 adds
+  zero-tolerance counters for lineage completeness, gap
+  suppression, re-run diffs and board rows; the truth-isolation
+  scan now covers the dashboards package too.
+- **Not yet built:** the console (R13). The round map runs to
+  R20 and continues past it until the production bar is met.
 - **The dataset in this repo is generated in-repo for the blueprint** — gold
   by construction, so the engine can be graded against a known future.
 - **Live models are stub-tested until configured:** hosted profiles fail
@@ -523,7 +601,19 @@ src/fmcg_forecast/
     verify.py      re-performance of stored runs
     service.py     parse / fork / diff / adopt — one workflow
     cli.py         the fmcg-agent-scenarios command line
-migrations/        0001-0006 SQL, sqlite + postgres dialects
+  dashboards/      the dashboard package (truth-isolated, R7):
+    pack.py        the dashboard pack: panel catalogue, head
+                   rule, grammar vocabulary, board sections
+    models.py      spec / view / assembly / board artefacts
+    parse.py       the deterministic prompt grammar, offline
+    lineage.py     figure -> artefact -> facts provenance walks
+    assemble.py    panel resolution + the computed re-run diff
+    verify.py      whole-dashboard re-performance + lineage walk
+    render.py      static HTML pages (dashboards + the board)
+    board.py       the morning desk board, from artefacts only
+    service.py     ask / save / assemble / board — one workflow
+    cli.py         the fmcg-agent-dashboards command line
+migrations/        0001-0007 SQL, sqlite + postgres dialects
 scripts/           demo.py, local_harness.py
 evals/             the eval gate
 docs/              architecture.md
