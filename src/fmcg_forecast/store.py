@@ -24,6 +24,12 @@ from fmcg_forecast.forecast.models import (
 )
 from fmcg_forecast.migrations import apply_migrations
 from fmcg_forecast.models import EventRecord, Manifest, Observation
+from fmcg_forecast.sentiment.models import (
+    SentimentCorpusManifest,
+    SentimentExtraction,
+    SentimentIndex,
+    SentimentItem,
+)
 
 
 class Store(Protocol):
@@ -72,6 +78,24 @@ class Store(Protocol):
     def list_accuracy_records(
         self, commodity: str | None = None, market: str | None = None
     ) -> list[AccuracyRecord]: ...
+    # -- sentiment corpus + artefacts (R4) ------------------------------
+    def insert_sentiment_items(self, items: list[SentimentItem]) -> int: ...
+    def list_sentiment_items(
+        self, commodity: str | None = None
+    ) -> list[SentimentItem]: ...
+    def get_sentiment_item(self, item_id: str) -> SentimentItem | None: ...
+    def save_sentiment_manifest(self, manifest: SentimentCorpusManifest) -> None: ...
+    def get_sentiment_manifest(self) -> SentimentCorpusManifest | None: ...
+    def insert_extraction(self, extraction: SentimentExtraction) -> None: ...
+    def get_extraction(self, item_id: str) -> SentimentExtraction | None: ...
+    def list_extractions(
+        self, commodity: str | None = None
+    ) -> list[SentimentExtraction]: ...
+    def insert_index(self, index: SentimentIndex) -> None: ...
+    def list_indices(self, commodity: str) -> list[SentimentIndex]: ...
+    def get_index(
+        self, commodity: str, week_start: date
+    ) -> SentimentIndex | None: ...
     def close(self) -> None: ...
 
 
@@ -479,6 +503,184 @@ class SqlStore:
         sql += " ORDER BY commodity, market, horizon_days"
         cur = self._conn.execute(self._q(sql), params)
         return [AccuracyRecord.model_validate(json.loads(r[0])) for r in cur.fetchall()]
+
+    # -- sentiment corpus + artefacts (R4) ------------------------------
+    # Items are insert-only, like observations: a duplicate item id
+    # fails loudly instead of overwriting a headline of record.
+    # Extractions and indices are content-addressed artefacts keyed
+    # by their id, with one CURRENT row per item / (commodity,
+    # week): the service checks the content address before
+    # inserting, so a re-run under the same pack is a no-op. The
+    # corpus manifest is product data only — it never carries the
+    # planted intent (that is grading-side, behind the grading
+    # store).
+
+    def insert_sentiment_items(self, items: list[SentimentItem]) -> int:
+        sql = self._q(
+            "INSERT INTO sentiment_items (item_id, commodity, item_date, "
+            "source, headline) VALUES (?, ?, ?, ?, ?)"
+        )
+        self._conn.executemany(
+            sql,
+            [
+                (
+                    i.item_id,
+                    i.commodity,
+                    self._date_param(i.item_date),
+                    i.source,
+                    i.headline,
+                )
+                for i in items
+            ],
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+        return len(items)
+
+    def list_sentiment_items(
+        self, commodity: str | None = None
+    ) -> list[SentimentItem]:
+        sql = (
+            "SELECT item_id, commodity, item_date, source, headline "
+            "FROM sentiment_items"
+        )
+        params: list = []
+        if commodity is not None:
+            sql += " WHERE commodity = ?"
+            params.append(commodity)
+        sql += " ORDER BY item_date, item_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            SentimentItem(
+                item_id=r[0], commodity=r[1], item_date=_as_date(r[2]),
+                source=r[3], headline=r[4],
+            )
+            for r in cur.fetchall()
+        ]
+
+    def get_sentiment_item(self, item_id: str) -> SentimentItem | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT item_id, commodity, item_date, source, headline "
+                "FROM sentiment_items WHERE item_id = ?"
+            ),
+            (item_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return SentimentItem(
+            item_id=row[0], commodity=row[1], item_date=_as_date(row[2]),
+            source=row[3], headline=row[4],
+        )
+
+    def save_sentiment_manifest(self, manifest: SentimentCorpusManifest) -> None:
+        sql = self._q(
+            "INSERT INTO sentiment_corpus_manifest (id, payload) VALUES (1, ?) "
+            "ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload"
+            if self.dialect == "postgres"
+            else "INSERT OR REPLACE INTO sentiment_corpus_manifest (id, payload) VALUES (1, ?)"
+        )
+        self._conn.execute(sql, (manifest.model_dump_json(),))
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_sentiment_manifest(self) -> SentimentCorpusManifest | None:
+        cur = self._conn.execute(
+            "SELECT payload FROM sentiment_corpus_manifest WHERE id = 1"
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return SentimentCorpusManifest.model_validate(json.loads(row[0]))
+
+    def insert_extraction(self, extraction: SentimentExtraction) -> None:
+        sql = self._q(
+            "INSERT INTO sentiment_extractions (extraction_id, item_id, "
+            "commodity, payload) VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                extraction.extraction_id,
+                extraction.item_id,
+                extraction.commodity,
+                extraction.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_extraction(self, item_id: str) -> SentimentExtraction | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM sentiment_extractions WHERE item_id = ?"
+            ),
+            (item_id,),
+        )
+        row = cur.fetchone()
+        return (
+            SentimentExtraction.model_validate(json.loads(row[0])) if row else None
+        )
+
+    def list_extractions(
+        self, commodity: str | None = None
+    ) -> list[SentimentExtraction]:
+        sql = "SELECT payload FROM sentiment_extractions"
+        params: list = []
+        if commodity is not None:
+            sql += " WHERE commodity = ?"
+            params.append(commodity)
+        # Item ids are assigned in date order at planting, so id
+        # order is date order.
+        sql += " ORDER BY item_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            SentimentExtraction.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    def insert_index(self, index: SentimentIndex) -> None:
+        sql = self._q(
+            "INSERT INTO sentiment_indices (index_id, commodity, week_start, "
+            "payload) VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                index.index_id,
+                index.commodity,
+                self._date_param(index.week_start),
+                index.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def list_indices(self, commodity: str) -> list[SentimentIndex]:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM sentiment_indices WHERE commodity = ? "
+                "ORDER BY week_start"
+            ),
+            (commodity,),
+        )
+        return [
+            SentimentIndex.model_validate(json.loads(r[0])) for r in cur.fetchall()
+        ]
+
+    def get_index(
+        self, commodity: str, week_start: date
+    ) -> SentimentIndex | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM sentiment_indices WHERE commodity = ? "
+                "AND week_start = ?"
+            ),
+            (commodity, self._date_param(week_start)),
+        )
+        row = cur.fetchone()
+        return SentimentIndex.model_validate(json.loads(row[0])) if row else None
 
     def close(self) -> None:
         self._conn.close()
