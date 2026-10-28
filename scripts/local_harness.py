@@ -2,7 +2,10 @@
 
 Loads the dataset into a throwaway database, starts uvicorn on a
 local port, and checks /health, /readiness, /manifest, /events and
-a /series read — the same contract a desk client would use.
+a /series read — the same contract a desk client would use. Round 4
+adds the sentiment surface: corpus manifest, items, the weekly
+index, a forecast's sentiment line (estimated for wheat, named
+not-estimable for groundnut).
 """
 
 from __future__ import annotations
@@ -80,7 +83,50 @@ def main() -> int:
         )
         r = client.get(f"{BASE}/forecasts/{forecast_id}/contributions")
         checks.append(
-            ("contribution breakdown", r.status_code == 200 and len(r.json()["lines"]) == 5)
+            ("contribution breakdown", r.status_code == 200 and len(r.json()["lines"]) == 6)
+        )
+        r = client.get(f"{BASE}/sentiment/manifest")
+        checks.append(
+            ("sentiment corpus manifest", r.status_code == 200 and r.json()["item_count"] == 583)
+        )
+        r = client.get(f"{BASE}/sentiment/items", params={"commodity": "coffee"})
+        checks.append(
+            ("coffee corpus is exactly four items", r.status_code == 200 and len(r.json()["items"]) == 4)
+        )
+        r = client.get(f"{BASE}/sentiment/items", params={"commodity": "wheat"})
+        first_wheat_item = r.json()["items"][0]["item_id"] if r.status_code == 200 else None
+        r = client.get(f"{BASE}/sentiment/items/{first_wheat_item}")
+        checks.append(
+            (
+                "one item read with its extraction",
+                r.status_code == 200 and r.json()["extraction"] is not None,
+            )
+        )
+        r = client.get(f"{BASE}/sentiment/index/wheat")
+        checks.append(
+            ("wheat weekly indices listed", r.status_code == 200 and len(r.json()["indices"]) > 100)
+        )
+        r = client.get(f"{BASE}/sentiment/verify")
+        checks.append(
+            ("sentiment re-performance clean", r.status_code == 200 and r.json()["problems"] == [])
+        )
+        r = client.get(f"{BASE}/forecasts/{forecast_id}/sentiment")
+        checks.append(
+            (
+                "wheat forecast sentiment line is estimated",
+                r.status_code == 200 and r.json()["state"] == "estimated",
+            )
+        )
+        r = client.post(
+            f"{BASE}/forecasts/run", json={"commodity": "groundnut", "market": "rajkot"}
+        )
+        groundnut_id = r.json()["forecast_id"] if r.status_code == 200 else None
+        r = client.get(f"{BASE}/forecasts/{groundnut_id}/sentiment")
+        checks.append(
+            (
+                "groundnut sentiment line is named not-estimable",
+                r.status_code == 200 and r.json()["state"] == "not_estimable",
+            )
         )
         r = client.get(f"{BASE}/forecasts/{forecast_id}/verify")
         checks.append(

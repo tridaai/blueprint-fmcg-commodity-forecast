@@ -8,9 +8,12 @@ figure-verified commentary. Round 3 adds the accuracy surface
 (Law 2): run the backtest harness, read its results, read the
 accuracy ledger, and read any forecast's pinned accuracy snapshot —
 the degraded flag rides on every forecast read; there is no
-parameter that takes it off. Every response carries the request id
-the logging middleware assigned, so a figure on a desk screen can be
-traced to the exact stored rows behind it.
+parameter that takes it off. Round 4 adds the sentiment surface
+(Law 3): the corpus items, their extractions, the weekly index per
+commodity and week, the pipeline run, a re-performance read, and
+any forecast's sentiment line. Every response carries the request
+id the logging middleware assigned, so a figure on a desk screen
+can be traced to the exact stored rows behind it.
 """
 
 from __future__ import annotations
@@ -40,6 +43,10 @@ from fmcg_forecast.forecast.service import (
 )
 from fmcg_forecast.logging_config import new_request_id, request_id_var
 from fmcg_forecast.modelport import ModelPort, OfflineModel
+from fmcg_forecast.sentiment.service import (
+    SentimentConflictError,
+    SentimentService,
+)
 from fmcg_forecast.store import SqlStore
 
 log = logging.getLogger("fmcg.api")
@@ -63,12 +70,20 @@ class BacktestRunRequest(BaseModel):
 
 
 def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
-    service = ForecastService(store, model or OfflineModel())
+    model_port = model or OfflineModel()
+    sentiment = SentimentService(store, model_port)
+    service = ForecastService(
+        store,
+        model_port,
+        sentiment_provider=sentiment.forecast_input,
+        sentiment_claim_verifier=sentiment.verify_claims,
+    )
     app = FastAPI(
         title="FMCG Commodity Forecast — Operations API",
-        version="0.3.0",
+        version="0.4.0",
         description="Read surfaces for the commodity price & driver store, "
-        "the governed forecast surface, and the backtest/accuracy surface.",
+        "the governed forecast surface, the backtest/accuracy surface, "
+        "and the sentiment surface.",
     )
 
     @app.middleware("http")
@@ -291,6 +306,73 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
             return service.accuracy_view(forecast_id)
         except ForecastNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/forecasts/{forecast_id}/sentiment")
+    def get_forecast_sentiment(forecast_id: str) -> dict:
+        try:
+            return service.sentiment_view(forecast_id)
+        except ForecastNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    # -- sentiment (R4, Law 3) ------------------------------------------
+
+    @app.post("/sentiment/run")
+    def run_sentiment() -> dict:
+        try:
+            return sentiment.run_pipeline()
+        except SentimentConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/sentiment/manifest")
+    def sentiment_manifest() -> dict:
+        found = store.get_sentiment_manifest()
+        if found is None:
+            raise HTTPException(status_code=404, detail="sentiment corpus not loaded")
+        return found.model_dump(mode="json")
+
+    @app.get("/sentiment/items")
+    def sentiment_items(commodity: str | None = Query(None)) -> dict:
+        found = sentiment.list_items(commodity)
+        return {"items": [i.model_dump(mode="json") for i in found]}
+
+    @app.get("/sentiment/items/{item_id}")
+    def sentiment_item(item_id: str) -> dict:
+        found = sentiment.get_item(item_id)
+        if found is None:
+            raise HTTPException(status_code=404, detail=f"unknown item {item_id}")
+        extraction = sentiment.get_extraction(item_id)
+        return {
+            "item": found.model_dump(mode="json"),
+            "extraction": (
+                extraction.model_dump(mode="json") if extraction is not None else None
+            ),
+        }
+
+    @app.get("/sentiment/extractions")
+    def sentiment_extractions(commodity: str | None = Query(None)) -> dict:
+        found = sentiment.list_extractions(commodity)
+        return {"extractions": [e.model_dump(mode="json") for e in found]}
+
+    @app.get("/sentiment/index/{commodity}")
+    def sentiment_index_list(commodity: str) -> dict:
+        found = sentiment.list_indices(commodity)
+        return {"indices": [i.model_dump(mode="json") for i in found]}
+
+    @app.get("/sentiment/index/{commodity}/{week_start}")
+    def sentiment_index_one(commodity: str, week_start: date) -> dict:
+        found = sentiment.get_index(commodity, week_start)
+        if found is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"no sentiment index for {commodity} in the week "
+                f"of {week_start.isoformat()} — the index is absent there, "
+                "never zero-filled",
+            )
+        return found.model_dump(mode="json")
+
+    @app.get("/sentiment/verify")
+    def sentiment_verify() -> dict:
+        return sentiment.verify_stored()
 
     # -- backtests + the accuracy ledger (R3) ---------------------------
 

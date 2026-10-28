@@ -32,6 +32,16 @@ def main() -> int:
     manifest = store.get_manifest()
     assert manifest is not None
 
+    from fmcg_forecast.modelport import build_model_port
+    from fmcg_forecast.sentiment.grading import build_sentiment_grading_store
+    from fmcg_forecast.sentiment.load import load_sentiment_corpus
+    from fmcg_forecast.sentiment.service import SentimentService
+
+    grading_store = build_sentiment_grading_store(str(demo_db))
+    load_sentiment_corpus(store, grading_store, settings.dataset_seed)
+    sentiment = SentimentService(store, build_model_port(settings))
+    pipeline = sentiment.run_pipeline()
+
     print(f"generator {manifest.generator_version} seed {manifest.seed}")
     print(f"history rows: {manifest.history_rows}  future (sealed truth) rows: {manifest.future_rows}")
     print(f"history digest: {manifest.history_digest[:16]}…")
@@ -74,9 +84,13 @@ def main() -> int:
 
     print("\n--- forecast engine (R2): computed, decomposed, gated ---")
     from fmcg_forecast.forecast.service import ForecastService
-    from fmcg_forecast.modelport import build_model_port
 
-    service = ForecastService(store, build_model_port(settings))
+    service = ForecastService(
+        store,
+        build_model_port(settings),
+        sentiment_provider=sentiment.forecast_input,
+        sentiment_claim_verifier=sentiment.verify_claims,
+    )
     wheat = service.run_forecast("wheat", "delhi_khari_baoli")
     print(f"wheat/delhi forecast {wheat.forecast_id} as of {wheat.as_of} (status: {wheat.status})")
     for summary in wheat.horizons_summary:
@@ -134,8 +148,55 @@ def main() -> int:
     print(f"wheat/indore forecast {wheat2.forecast_id} carries accuracy: "
           f"{wheat2.accuracy.state} (a fresh run pins the ledger as it now stands; "
           f"the pre-backtest run above keeps its unmeasured snapshot)")
+
+    print("\n--- sentiment (R4, Law 3): extracted, indexed, cited — never asserted ---")
+    print(f"corpus: {pipeline['items']} planted items -> {pipeline['extractions_new']} "
+          f"extractions ({pipeline['unclassified']} unclassified, reasons on record), "
+          f"{pipeline['indices_new']} weekly indices")
+    graded = sentiment_grading_check(sentiment, grading_store)
+    print(f"extraction vs planted intent: {graded} disagreements across the whole corpus")
+    wheat_line = next(l for l in wheat.lines if l.driver == "sentiment")
+    print(f"wheat forecast sentiment line: {wheat_line.input_summary['state']}, "
+          f"coefficient {wheat_line.coefficient:+.4f} on the weekly index, latest week "
+          f"{wheat_line.input_summary['latest_index_value']:+.4f} citing "
+          f"{', '.join(wheat_line.input_summary['cited_item_ids'])}")
+    reading = next(
+        (s for s in commentary.text.split('. ') if 'Sentiment reading' in s), None
+    )
+    print(f"  commentary carries the reading with its items: {reading}")
+    coffee_line = next(l for l in coffee_fc.lines if l.driver == "sentiment")
+    print(f"coffee forecast sentiment line: {coffee_line.input_summary['state']} — "
+          f"{coffee_line.input_summary['reason']}")
+    stored = sentiment.verify_stored()
+    print(f"  re-performance of every stored extraction and index: "
+          f"{len(stored['problems'])} problems")
     print(f"sealed truth rows stored: {truth_store.count()} (readable only via the truth store)")
     return 0
+
+
+def sentiment_grading_check(sentiment, grading_store) -> int:
+    """Demo-side grading: stored extractions vs the planted intent.
+
+    Lives in the demo (a load-path surface) — the scoring code
+    never sees the intent; only surfaces like this one, the tests
+    and the eval gate may compare against it.
+    """
+    from fmcg_forecast.sentiment.corpus import expected_reading
+
+    disagreements = 0
+    for extraction in sentiment.list_extractions():
+        intent = grading_store.get_intent(extraction.item_id)
+        expected = expected_reading(intent)
+        if extraction.status != expected["status"]:
+            disagreements += 1
+        elif expected["status"] == "classified" and (
+            extraction.direction != expected["direction"]
+            or extraction.strength != expected["strength"]
+            or extraction.score != expected["score"]
+            or extraction.aspects != expected["aspects"]
+        ):
+            disagreements += 1
+    return disagreements
 
 
 if __name__ == "__main__":
