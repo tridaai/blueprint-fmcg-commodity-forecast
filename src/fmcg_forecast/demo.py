@@ -309,6 +309,69 @@ def main() -> int:
     except ScenarioParseError as refusal:
         print(f"  an out-of-catalogue what-if is refused, not improvised: "
               f"clause {refusal.clause!r} — {refusal.reason}")
+
+    print("\n--- prompt-to-dashboard (R7, Law 6): a stated spec, verified pages, a provenance appendix, the morning board ---")
+    from fmcg_forecast.dashboards.service import DashboardService
+
+    dashboards = DashboardService(
+        store, build_model_port(settings), events, sentiment
+    )
+    prompt = (
+        "wheat forecast at delhi and soybean sentiment and declared "
+        "events for soybean and the coffee forecast and the adopted "
+        "scenario for soybean at indore and show me the coffee stock position"
+    )
+    spec = dashboards.ask(prompt, asked_by="a.sharma", created_on=date(2026, 1, 5))
+    print(f"prompt: {prompt!r}")
+    print(f"  stated spec {spec.spec_id} under dashboard pack "
+          f"{spec.pack_version} (model profile {spec.model_profile}):")
+    for panel in spec.panels:
+        if panel.gap_needed:
+            print(f"    panel {panel.panel_no}: NAMED GAP — {panel.gap_needed}")
+        else:
+            print(f"    panel {panel.panel_no}: {panel.kind:<14} "
+                  f"{panel.scope} bound at ask time to "
+                  f"{panel.binding_artefact_ids}")
+    view = dashboards.save_view(
+        spec.spec_id, "morning desk", saved_by="a.sharma",
+        saved_on=date(2026, 1, 5),
+    )
+    print(f"  saved as view {view.view_id} ({view.name!r}) — a name "
+          f"pointing at the spec, re-runnable against fresh data")
+    assembly = dashboards.assemble(spec.spec_id, assembled_on=date(2026, 1, 5))
+    rendered = [p for p in assembly.panels if p.state == "rendered"]
+    gaps = [p for p in assembly.panels if p.state == "gap"]
+    figures = sum(len(p.figures) for p in rendered)
+    print(f"  assembly {assembly.assembly_id}: {len(rendered)} panels "
+          f"rendered ({figures} figures), {len(gaps)} named gap(s); "
+          f"verified before it was stored — "
+          f"{len(dashboards.verify_stored(assembly.assembly_id))} problems; "
+          f"the page is {len(assembly.html)} bytes of static HTML")
+    appendix = dashboards.appendix(assembly.assembly_id)
+    walks = [
+        (f["key"], f["lineage"])
+        for p in appendix["panels"] for f in p["figures"]
+    ]
+    terminal = sum(
+        1 for _, lineage in walks
+        if any(fact["kind"] in ("observation_series", "sentiment_item",
+                                "event_declaration", "manifest")
+               for fact in lineage)
+    )
+    print(f"  provenance appendix: {len(walks)} figures, every one "
+          f"walked to a stored fact ({terminal}/{len(walks)} terminate "
+          f"at observations, items, declarations or the manifest) — "
+          f"e.g. figure {walks[0][0]!r} traces through "
+          f"{[fact['kind'] + ':' + fact['ref'] for fact in walks[0][1][:2]]} …")
+    again = dashboards.assemble(spec.spec_id, assembled_on=date(2026, 1, 6))
+    print(f"  re-assembling against unchanged data returns the same "
+          f"artefact ({again.assembly_id == assembly.assembly_id}); a "
+          f"re-run after new forecasts land computes the diff instead")
+    board = dashboards.board(date(2026, 2, 15))
+    print(f"  morning board {board.board_id} for {board.board_date} — "
+          f"exceptions first, every row an artefact:")
+    for row in board.rows:
+        print(f"    [{row.kind:<15}] {row.headline}  ({row.artefact_id})")
     print(f"sealed truth rows stored: {truth_store.count()} (readable only via the truth store)")
     return 0
 
