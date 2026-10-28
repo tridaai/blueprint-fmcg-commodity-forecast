@@ -573,6 +573,13 @@ def run_engine(
         events_applied=[a.event_id for a in event_adjustments],
     )
 
+    named_missing = missing_drivers(spec)
+    if sentiment_not_estimable is not None:
+        # Named alongside the catalogue's data gaps, so the desk
+        # sees the absent driver in the same place it already
+        # looks — the line itself carries the failing floors.
+        named_missing = named_missing + ["sentiment_not_estimable"]
+
     forecast = Forecast(
         forecast_id="FCST-pending",
         commodity=commodity,
@@ -584,7 +591,7 @@ def run_engine(
         days=days,
         lines=lines,
         horizons_summary=horizons_summary,
-        missing_drivers=missing_drivers(spec),
+        missing_drivers=named_missing,
     )
     forecast.forecast_id = forecast_content_id(forecast)
     return forecast
