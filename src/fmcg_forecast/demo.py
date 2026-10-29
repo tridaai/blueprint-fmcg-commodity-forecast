@@ -372,6 +372,60 @@ def main() -> int:
           f"exceptions first, every row an artefact:")
     for row in board.rows:
         print(f"    [{row.kind:<15}] {row.headline}  ({row.artefact_id})")
+    print("\n--- buy signals & coverage planning (R8, F20-PO2/PO3): a computed call per series, the desk's own plan priced ---")
+    from fmcg_forecast.planning.models import PlanLine
+    from fmcg_forecast.planning.service import PlanningService
+    from fmcg_forecast.signals.service import SignalService
+
+    signals = SignalService(store)
+    planning = PlanningService(store, signals)
+    for commodity, market in (
+        ("soybean", "indore"),
+        ("wheat", "delhi_khari_baoli"),
+        ("chili", "guntur"),
+    ):
+        signal = signals.compute_for_series(commodity, market)
+        print(f"  signal {signal.signal_id} — {commodity} at {market}: "
+              f"{signal.value} (base {signal.base_value})")
+        for line in signal.reasoning:
+            print(f"      {line}")
+    plan = planning.enter_plan(
+        commodity="soybean", market="indore", entered_by="r.menon",
+        entered_on=date(2026, 1, 5), opening_stock_tonnes=120.0,
+        lines=[
+            PlanLine(month=date(2026, 1, 1), required_tonnes=300.0),
+            PlanLine(month=date(2026, 2, 1), required_tonnes=300.0),
+            PlanLine(month=date(2026, 3, 1), required_tonnes=280.0),
+        ],
+        note="Q1 soybean requirement, entered by the desk",
+    )
+    print(f"  requirement plan {plan.plan_id} — desk-entered by "
+          f"{plan.entered_by} (origin: {plan.origin}; the desk's own "
+          f"statement, never market data)")
+    assessment = planning.assess(plan.plan_id)
+    print(f"  assessment {assessment.assessment_id} on the official "
+          f"forecast {assessment.forecast_id}: coverage "
+          f"{assessment.coverage_days} days, stockout "
+          f"{assessment.stockout_month}, uncovered "
+          f"{assessment.total_uncovered_tonnes} t, exposure "
+          f"INR {assessment.total_exposure_inr:,.2f}")
+    for option in assessment.options:
+        print(f"    rank {option.rank}: {option.name:<13} expected "
+              f"INR {option.cost_at_p50_inr:,.2f} / adverse "
+              f"INR {option.cost_at_p90_inr:,.2f}")
+    scenario_assessment = planning.assess(
+        plan.plan_id, basis="adopted_scenario"
+    )
+    print(f"  the same plan on the adopted scenario "
+          f"{scenario_assessment.scenario_id} (badged "
+          f"scenario-based, never blended): exposure "
+          f"INR {scenario_assessment.total_exposure_inr:,.2f}")
+    board = dashboards.board(date(2026, 2, 15))
+    signal_rows = [r for r in board.rows if r.kind == "signal"]
+    print(f"  the morning board now carries a signals section — "
+          f"{len(signal_rows)} actionable row(s):")
+    for row in signal_rows:
+        print(f"    [{row.kind:<15}] {row.headline}  ({row.artefact_id})")
     print(f"sealed truth rows stored: {truth_store.count()} (readable only via the truth store)")
     return 0
 

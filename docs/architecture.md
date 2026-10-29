@@ -62,6 +62,14 @@
 | Dashboard renderer | `dashboards/render.py` | One static HTML file per dashboard / board — inline CSS, light theme, no JavaScript — a pure function of the stored artefacts: panels with artefact ids on every figure, the diff section, and the provenance appendix walking every figure to its facts. |
 | Desk board | `dashboards/board.py` | The morning exception inbox (F20-OW1) computed from artefacts only: degraded series, pending approval / adoption gates, active declared events (verdict on the row's face), forecast changes between a series' two most recent run dates, and named data gaps — ranked by the pack's section order, every row linked to its artefact; a clean series does not appear. The board is itself a content-addressed artefact. |
 | Dashboard service | `dashboards/service.py` | The surface workflow every caller shares: ask (model port, pack-validated, ask-time bindings recorded), saved views (names pointing at specs), assembly (re-resolve -> diff -> render -> verify -> store; an identical re-assembly returns the stored artefact), the appendix and verify reads, and the board. Mirrored by the `fmcg-agent-dashboards` CLI. |
+| Signal pack | `signals/pack.py` | The buy-window decision as versioned data (R8, F20-PO2): the 30-day horizon, the rise/fall bars against spot, the wide-band bar, the degraded and unmeasured caps, and the decision table stated in order. Fail-closed loader; every signal names its pack version. |
+| Signal engine | `signals/engine.py` | The pack's table performed over the pinned head forecast: spot from the store, drift and band from the forecast's own horizon summaries, the accuracy state from its pinned attachment (never re-derived), declared events overlapping the horizon from the registry. Reasoning lines are formatted from the numbers themselves, so re-performance reproduces them exactly. |
+| Signal verifier | `signals/verify.py` | Recomputes the whole signal from the pinned forecast + store under the signal's own pack and compares field for field; runs the forecast verifier over the pinned artefact; and checks the hard rules on their own lines — a degraded or unmeasured series carrying buy_now is a problem even if everything else re-performs. |
+| Signal service | `signals/service.py` | Compute (idempotent, content-addressed; pins the series' head under the dashboard pack's head rule), reads and re-performance. Mirrored by the `fmcg-agent-signals` CLI and the `/signals` API. |
+| Planning pack | `planning/pack.py` | The planner's arithmetic as versioned data (R8, F20-PO3): quintals per tonne, the month price rule (mean daily P50/P90 over covered days, 4dp before valuing; beyond-horizon months named, never valued), FIFO stock allocation, the coverage-days rule, the three option shapes, and the ranking criteria — expected cost, then adverse cost, then name. The pinned signal is context only and never enters the ranking. |
+| Planning engine | `planning/engine.py` | Pure computation over one desk-entered plan and one pinned price source (the official head forecast, or an adopted scenario's fork): month pricing, stock allocation, coverage days, paise-exact exposure, option schedules on both price bases, ranking, and the assessment's figures — each figure basis-tagged (desk / market / mixed) with its lineage walk. |
+| Planning verifier | `planning/verify.py` | Re-performs the whole assessment and compares field for field (the pinned forecast/fork and the pinned signal are themselves re-performed); re-checks every figure's walk through the R7 lineage verifier; and enforces provenance separation on its own lines — a desk figure's walk is exactly the `desk_entered` terminal fact, a market figure's walk contains none, a mixed figure's carries exactly one. |
+| Planning service | `planning/service.py` | The desk's workflow: plan entry as a named act (placeholder enterers refused, one line per calendar month, catalogue series), assessment on the official basis or — only where a scenario stands adopted — the scenario basis, reads and re-performance. Mirrored by the `fmcg-agent-planning` CLI and the `/planning` API. |
 
 ## Data design
 
@@ -124,6 +132,24 @@
   everything else). Nothing on any of them is computed at read
   time except the board's HTML, which re-renders from the
   stored rows.
+- A **signal** is one artefact (migration 0008): the call, the
+  pinned forecast it was computed from, every input the pack's
+  table read (spot, drift, band, accuracy state and its ledger
+  records, overlapping declared events, named missing drivers)
+  and the reasoning lines — content-addressed over all of it,
+  so the call the desk read is the call that re-performs.
+- A **plan** and its **assessment** are two artefacts
+  (migration 0008): the plan is the desk's own statement
+  (enterer, date, opening stock, tonnes by month) with
+  `origin = "desk_entered"` on its face — the one artefact
+  family in the repo that is not derived from market data, and
+  the lineage vocabulary keeps it that way (its terminal fact
+  class is `desk_entered`, distinct from every stored market
+  fact). The assessment is content-addressed over the plan, the
+  pinned price source (head forecast or adopted fork), the
+  pinned signal and the planning pack version: month rows,
+  coverage, exposure, ranked options and basis-tagged figures
+  with their walks.
 
 ## The pipeline the rounds build
 
@@ -163,6 +189,21 @@ LangGraph state machine whose transitions are stored artefacts:
   board ranks the day's exceptions — degraded series, pending
   gates, active events, forecast changes, named gaps — each row
   an artefact.
+- **decide** (R8, landed): buy-window signals and coverage
+  planning (F20-PO2/PO3). Each series' head forecast becomes one
+  computed call under the signal pack — reasoning on the
+  artefact's face, degraded and unmeasured series capped by
+  rule, overlapping shocks named, the whole call re-performed
+  by its verifier. The desk's own requirement plans enter as
+  desk-entered artefacts with a lineage terminal class of their
+  own (never market provenance), and assessments price them
+  against the official forecast or an adopted scenario's fork —
+  coverage, paise-exact exposure and options ranked only by the
+  planning pack's criteria. The board gains a signals section;
+  signals deliberately do not join the dashboard panel
+  catalogue, which stays closed versioned data. No trade or
+  purchase is ever placed — both artefact families state the
+  scope line on their face.
 
 ## Failure posture
 

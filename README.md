@@ -444,6 +444,71 @@ and a frozen `constraints.txt` · multi-stage non-root Docker.
   carries, and a "clean" read of a degraded series — the flag
   rides on every surface, API included.
 
+## What Round 8 adds
+
+- **Buy-window signals** — per series, one computed call —
+  **buy_now / phased / wait** — derived in code from the pinned
+  head forecast under a **versioned signal pack** that states
+  every threshold: the 30-day horizon, the rise/fall bars the
+  path must clear against spot (the last observed modal price),
+  and the band width beyond which one commitment is too
+  exposed. The decision table is the pack's, applied in order,
+  and the **reasoning lines ride on the signal's face** — the
+  inputs, the bars, what decided it. Hard rules, graded by the
+  eval gate: a **degraded series can never produce a strong
+  buy** (the pack caps it at phased; an unmeasured series is
+  capped the same way), a series inside a **declared
+  shock/event window has that event named on the signal**, the
+  forecast's named missing drivers carry onto the signal, and
+  every signal **re-performs exactly** from its pinned forecast
+  artefact — the verifier recomputes the whole call and
+  compares field for field. A signal places no trade;
+  procurement execution is out of scope by design, and every
+  artefact says so.
+- **Coverage & exposure planner** — the desk enters **its own
+  requirement plan** (tonnes by month, its stated opening
+  stock) as a **desk-entered artefact**: labelled desk-entered
+  on every surface, with a lineage terminal class of its own —
+  provenance walks resting on the desk's statement terminate
+  at `desk_entered`, never at market data, and the planner's
+  verifier counts desk facts on every figure's walk (desk
+  figures rest on the desk fact alone; market figures contain
+  none; mixed figures carry exactly one). Against a plan, the
+  planner computes **coverage days** at the plan's own burn
+  rate, allocates stock first-in-first-out by month, prices
+  each month by the planning pack's stated month rule (the
+  pinned forecast's mean daily P50 over covered days; months
+  past the horizon are **named, never valued**), and values the
+  **uncovered exposure paise-exact**, re-performed by its
+  verifier. Three stated **purchase options** (cover now /
+  staged / phased) are ranked **only** by the pack's criteria —
+  expected cost, then adverse (P90) cost, then name — each
+  carrying its schedule arithmetic. The series' buy signal is
+  pinned as context (an option running against it says so) but
+  never enters the ranking. Where the desk has **adopted a
+  scenario** (R6), an assessment may price on the adopted fork
+  instead — pinned, badged **scenario-based**, never blended
+  with the official view.
+- **Surfaces** — migration 0008 (both dialects); `GET
+  /signals/pack`, `POST /signals/compute`, `GET /signals` +
+  `/{id}` + `/{id}/verify`; `GET /planning/pack`, `POST
+  /planning/plans`, `GET /planning/plans` + `/{id}`, `POST
+  /planning/plans/{id}/assess`, `GET /planning/assessments` +
+  `/{id}` + `/{id}/verify`; the `fmcg-agent-signals` and
+  `fmcg-agent-planning` CLIs; the **morning board gains a
+  signals section** — actionable signal rows (buy_now and
+  phased; a wait is the absence of an exception) appended after
+  the dashboard pack's sections under their own heading, ranked
+  strong buys first, every row backed by its signal artefact.
+  One deliberate non-fit: signals do **not** become dashboard
+  panels — the dashboard pack's panel catalogue is closed
+  versioned data, and a signal is a computed call, not a
+  catalogue figure; it surfaces through its own API, CLI and
+  the board instead. The demo walks a rising series to its buy
+  signal with reasoning, the degraded chili series with its
+  state named on the signal's face, and a requirement plan to
+  exposure + ranked options on both price bases.
+
 ## Honest status
 
 - **Built and gated in R1:** the spine, generator + manifest, store port +
@@ -525,6 +590,27 @@ and a frozen `constraints.txt` · multi-stage non-root Docker.
   zero-tolerance counters for lineage completeness, gap
   suppression, re-run diffs and board rows; the truth-isolation
   scan now covers the dashboards package too.
+- **Built and gated in R8:** the signal pack (horizon, rise/fall
+  bars, wide-band bar, accuracy caps as versioned data), the
+  buy-window signal engine + re-performance verifier (the
+  degraded and unmeasured caps are hard rules, graded on
+  hand-computed fixtures: rising / falling / degraded /
+  in-event-window), the planning pack (month price rule, FIFO
+  allocation, coverage rule, option shapes, ranking criteria as
+  versioned data), desk-entered requirement plans with their own
+  lineage terminal class, coverage assessments (paise-exact
+  exposure, ranked options, scenario-basis assessments pinned
+  to adopted forks), the board's signals section, migration
+  0008, signal + planning API surfaces and the
+  `fmcg-agent-signals` / `fmcg-agent-planning` CLIs, demo walk.
+  Eval gate v8 adds zero-tolerance counters for degraded-series
+  strong signals, signal re-performance, exposure arithmetic,
+  desk/market provenance mixing and off-criteria ranking; the
+  truth-isolation scan now covers the signals and planning
+  packages too. Migration 0008's Postgres dialect is written to
+  the same shape as 0007's (which was itself not live-applied);
+  the Postgres profile remains verified by parity of the SQL,
+  not by a live cluster run in this round.
 - **Not yet built:** the console (R13). The round map runs to
   R20 and continues past it until the production bar is met.
 - **The dataset in this repo is generated in-repo for the blueprint** — gold
@@ -613,7 +699,26 @@ src/fmcg_forecast/
     board.py       the morning desk board, from artefacts only
     service.py     ask / save / assemble / board — one workflow
     cli.py         the fmcg-agent-dashboards command line
-migrations/        0001-0007 SQL, sqlite + postgres dialects
+  signals/         the buy-window signal package (truth-isolated, R8):
+    pack.py        the signal pack: horizon, rise/fall bars,
+                   wide-band bar, accuracy caps, decision table
+    models.py      the buy-signal artefact (reasoning on its face)
+    engine.py      the pack's decision table, performed in code
+    verify.py      whole-signal re-performance + the hard caps
+    lineage.py     signal -> forecast -> facts provenance walks
+    service.py     compute / read / verify — one workflow
+    cli.py         the fmcg-agent-signals command line
+  planning/        the coverage planner package (truth-isolated, R8):
+    pack.py        the planning pack: month price rule, FIFO
+                   allocation, coverage rule, option shapes,
+                   ranking criteria
+    models.py      desk-entered plan / coverage assessment
+    engine.py      coverage, exposure and ranked options, in code
+    verify.py      re-performance + provenance separation checks
+    lineage.py     the desk_entered terminal fact
+    service.py     enter / assess / verify — one workflow
+    cli.py         the fmcg-agent-planning command line
+migrations/        0001-0008 SQL, sqlite + postgres dialects
 scripts/           demo.py, local_harness.py
 evals/             the eval gate
 docs/              architecture.md
