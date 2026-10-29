@@ -44,7 +44,9 @@ from fmcg_forecast.scenarios.models import (
     ScenarioRequest,
     ScenarioRun,
 )
+from fmcg_forecast.intake.models import IntakeCheckAct, IntakeEntry
 from fmcg_forecast.signals.models import BuySignal
+from fmcg_forecast.thin.models import ThinAssessment
 from fmcg_forecast.sentiment.models import (
     SentimentCorpusManifest,
     SentimentExtraction,
@@ -207,6 +209,24 @@ class Store(Protocol):
     def list_alert_digests(
         self, subscription_id: str | None = None
     ) -> list[AlertDigest]: ...
+    # -- thin-data assessments + assisted intake (R10) -----------------
+    def insert_thin_assessment(self, assessment: ThinAssessment) -> None: ...
+    def get_thin_assessment(
+        self, assessment_id: str
+    ) -> ThinAssessment | None: ...
+    def list_thin_assessments(
+        self, commodity: str | None = None, market: str | None = None
+    ) -> list[ThinAssessment]: ...
+    def insert_intake_entry(self, entry: IntakeEntry) -> None: ...
+    def get_intake_entry(self, entry_id: str) -> IntakeEntry | None: ...
+    def list_intake_entries(
+        self, commodity: str | None = None, market: str | None = None
+    ) -> list[IntakeEntry]: ...
+    def insert_intake_check_act(self, act: IntakeCheckAct) -> None: ...
+    def get_intake_check_act(self, act_id: str) -> IntakeCheckAct | None: ...
+    def list_intake_check_acts(
+        self, entry_id: str | None = None
+    ) -> list[IntakeCheckAct]: ...
     def close(self) -> None: ...
 
 
@@ -1493,6 +1513,155 @@ class SqlStore:
         cur = self._conn.execute(self._q(sql), params)
         return [
             AlertDigest.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    # -- thin-data assessments + assisted intake (R10) -----------------
+    # Assessments, entries and check acts are insert-only payload
+    # tables in the standing idiom: the services check the
+    # content address before inserting, so a recomputation or
+    # re-entry that lands on the same content is a no-op rather
+    # than a duplicate-write error.
+
+    def insert_thin_assessment(self, assessment: ThinAssessment) -> None:
+        sql = self._q(
+            "INSERT INTO thin_assessments (assessment_id, "
+            "forecast_id, commodity, market, payload) "
+            "VALUES (?, ?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                assessment.assessment_id,
+                assessment.forecast_id,
+                assessment.commodity,
+                assessment.market,
+                assessment.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_thin_assessment(
+        self, assessment_id: str
+    ) -> ThinAssessment | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM thin_assessments "
+                "WHERE assessment_id = ?"
+            ),
+            (assessment_id,),
+        )
+        row = cur.fetchone()
+        return (
+            ThinAssessment.model_validate(json.loads(row[0])) if row else None
+        )
+
+    def list_thin_assessments(
+        self, commodity: str | None = None, market: str | None = None
+    ) -> list[ThinAssessment]:
+        sql = "SELECT payload FROM thin_assessments"
+        clauses, params = [], []
+        if commodity is not None:
+            clauses.append("commodity = ?")
+            params.append(commodity)
+        if market is not None:
+            clauses.append("market = ?")
+            params.append(market)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY commodity, market, assessment_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            ThinAssessment.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    def insert_intake_entry(self, entry: IntakeEntry) -> None:
+        sql = self._q(
+            "INSERT INTO intake_entries (entry_id, commodity, "
+            "market, obs_date, driver, payload) "
+            "VALUES (?, ?, ?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                entry.entry_id,
+                entry.commodity,
+                entry.market,
+                self._date_param(entry.obs_date),
+                entry.driver,
+                entry.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_intake_entry(self, entry_id: str) -> IntakeEntry | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM intake_entries WHERE entry_id = ?"
+            ),
+            (entry_id,),
+        )
+        row = cur.fetchone()
+        return IntakeEntry.model_validate(json.loads(row[0])) if row else None
+
+    def list_intake_entries(
+        self, commodity: str | None = None, market: str | None = None
+    ) -> list[IntakeEntry]:
+        sql = "SELECT payload FROM intake_entries"
+        clauses, params = [], []
+        if commodity is not None:
+            clauses.append("commodity = ?")
+            params.append(commodity)
+        if market is not None:
+            clauses.append("market = ?")
+            params.append(market)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY commodity, market, entry_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            IntakeEntry.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    def insert_intake_check_act(self, act: IntakeCheckAct) -> None:
+        sql = self._q(
+            "INSERT INTO intake_check_acts (act_id, entry_id, "
+            "payload) VALUES (?, ?, ?)"
+        )
+        self._conn.execute(
+            sql, (act.act_id, act.entry_id, act.model_dump_json())
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_intake_check_act(self, act_id: str) -> IntakeCheckAct | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM intake_check_acts WHERE act_id = ?"
+            ),
+            (act_id,),
+        )
+        row = cur.fetchone()
+        return (
+            IntakeCheckAct.model_validate(json.loads(row[0])) if row else None
+        )
+
+    def list_intake_check_acts(
+        self, entry_id: str | None = None
+    ) -> list[IntakeCheckAct]:
+        sql = "SELECT payload FROM intake_check_acts"
+        params: list = []
+        if entry_id is not None:
+            sql += " WHERE entry_id = ?"
+            params.append(entry_id)
+        sql += " ORDER BY entry_id, act_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            IntakeCheckAct.model_validate(json.loads(r[0]))
             for r in cur.fetchall()
         ]
 
