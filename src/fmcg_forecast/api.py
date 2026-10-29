@@ -39,12 +39,19 @@ rows behind it.
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, datetime
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
+from fmcg_forecast.alerts.pack import load_alert_pack
+from fmcg_forecast.alerts.service import (
+    AlertNotFoundError,
+    AlertService,
+    AlertStateError,
+    AlertValidationError,
+)
 from fmcg_forecast.backtest.harness import run_all as run_backtest_harness
 from fmcg_forecast.backtest.pack import load_accuracy_pack
 from fmcg_forecast.catalogue import COMMODITIES
@@ -208,6 +215,37 @@ class AssessPlanRequest(BaseModel):
     basis: str = "official_forecast"
 
 
+class SubscribeRequest(BaseModel):
+    subscriber: str
+    role: str
+    entered_on: date | None = None
+    commodities: list[str] = []
+    markets: list[str] = []
+    kinds: list[str]
+    min_severity: str = "minor"
+    note: str = ""
+
+
+class SweepRequest(BaseModel):
+    at: datetime
+
+
+class AlertActRequest(BaseModel):
+    actor: str
+    role: str
+    at: datetime
+    note: str = ""
+
+
+class CloseAlertRequest(AlertActRequest):
+    reason: str
+
+
+class DigestRequest(BaseModel):
+    subscription_id: str
+    digest_date: date
+
+
 def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     model_port = model or OfflineModel()
     sentiment = SentimentService(store, model_port)
@@ -231,15 +269,18 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     )
     signal_service = SignalService(store)
     planning_service = PlanningService(store, signal_service)
+    alert_service = AlertService(store)
     app = FastAPI(
         title="FMCG Commodity Forecast — Operations API",
-        version="0.8.0",
+        version="0.9.0",
         description="Read surfaces for the commodity price & driver store, "
         "the governed forecast surface, the backtest/accuracy surface, "
         "the sentiment surface, the event registry, the scenario "
         "studio, the dashboard assembler with the morning desk "
-        "board, the buy-window signals, and the coverage & "
-        "exposure planner.",
+        "board, the buy-window signals, the coverage & "
+        "exposure planner, and the alerting surface: desk-entered "
+        "subscriptions, derived alerts, attributed acts and the "
+        "escalation clock.",
     )
 
     @app.middleware("http")
@@ -1071,5 +1112,132 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
         except PlanningNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"assessment_id": assessment_id, "problems": problems}
+
+    # -- alerting, subscriptions and escalation (R9, F20-AL1/AL2/AL3) --
+
+    @app.get("/alerts/pack")
+    def alert_pack() -> dict:
+        return load_alert_pack().model_dump(mode="json")
+
+    @app.post("/alerts/subscriptions", status_code=201)
+    def subscribe(body: SubscribeRequest) -> dict:
+        try:
+            subscription = alert_service.enter_subscription(
+                subscriber=body.subscriber,
+                role=body.role,
+                entered_on=body.entered_on or date.today(),
+                commodities=body.commodities,
+                markets=body.markets,
+                kinds=body.kinds,
+                min_severity=body.min_severity,
+                note=body.note,
+            )
+        except AlertValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return alert_service.subscription_view(subscription.subscription_id)
+
+    @app.get("/alerts/subscriptions")
+    def list_subscriptions(
+        subscriber: str | None = Query(None),
+    ) -> dict:
+        found = alert_service.list_subscriptions(subscriber)
+        return {
+            "subscriptions": [
+                alert_service.subscription_view(s.subscription_id)
+                for s in found
+            ]
+        }
+
+    @app.post("/alerts/sweep")
+    def sweep(body: SweepRequest) -> dict:
+        return alert_service.sweep(body.at)
+
+    @app.get("/alerts/crossings")
+    def list_crossings(
+        commodity: str | None = Query(None),
+        market: str | None = Query(None),
+    ) -> dict:
+        found = store.list_price_crossings(commodity, market)
+        return {"crossings": [c.model_dump(mode="json") for c in found]}
+
+    @app.get("/alerts")
+    def list_alerts(
+        commodity: str | None = Query(None),
+        market: str | None = Query(None),
+        subscription_id: str | None = Query(None),
+    ) -> dict:
+        found = alert_service.list_alerts(commodity, market, subscription_id)
+        return {"alerts": [a.model_dump(mode="json") for a in found]}
+
+    @app.get("/alerts/{alert_id}")
+    def get_alert(
+        alert_id: str, at: datetime | None = Query(None)
+    ) -> dict:
+        try:
+            return alert_service.alert_view(alert_id, at or datetime.now())
+        except AlertNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/alerts/{alert_id}/acknowledge")
+    def acknowledge_alert(alert_id: str, body: AlertActRequest) -> dict:
+        try:
+            act = alert_service.acknowledge(
+                alert_id,
+                actor=body.actor,
+                role=body.role,
+                acted_at=body.at,
+                note=body.note,
+            )
+        except AlertNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except AlertValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except AlertStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return act.model_dump(mode="json")
+
+    @app.post("/alerts/{alert_id}/close")
+    def close_alert(alert_id: str, body: CloseAlertRequest) -> dict:
+        try:
+            act = alert_service.close(
+                alert_id,
+                actor=body.actor,
+                role=body.role,
+                acted_at=body.at,
+                reason=body.reason,
+                note=body.note,
+            )
+        except AlertNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except AlertValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except AlertStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return act.model_dump(mode="json")
+
+    @app.get("/alerts/{alert_id}/verify")
+    def verify_alert_endpoint(alert_id: str) -> dict:
+        try:
+            problems = alert_service.verify_stored(alert_id)
+        except AlertNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"alert_id": alert_id, "problems": problems}
+
+    @app.post("/alerts/digests", status_code=201)
+    def build_digest(body: DigestRequest) -> dict:
+        try:
+            digest = alert_service.build_digest(
+                body.subscription_id, body.digest_date
+            )
+        except AlertNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return alert_service.digest_view(digest.digest_id)
+
+    @app.get("/alerts/digests/{digest_id}")
+    def get_digest(digest_id: str) -> dict:
+        try:
+            return alert_service.digest_view(digest_id)
+        except AlertNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return app

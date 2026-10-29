@@ -44,6 +44,7 @@ fmcg-agent-scenarios = "fmcg_forecast.scenarios.cli:main"
 fmcg-agent-dashboards = "fmcg_forecast.dashboards.cli:main"
 fmcg-agent-signals = "fmcg_forecast.signals.cli:main"
 fmcg-agent-planning = "fmcg_forecast.planning.cli:main"
+fmcg-agent-alerts = "fmcg_forecast.alerts.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fmcg_forecast"]
