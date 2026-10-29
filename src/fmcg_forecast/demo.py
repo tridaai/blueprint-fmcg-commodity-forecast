@@ -426,6 +426,82 @@ def main() -> int:
           f"{len(signal_rows)} actionable row(s):")
     for row in signal_rows:
         print(f"    [{row.kind:<15}] {row.headline}  ({row.artefact_id})")
+    print("\n--- alerting, subscriptions & escalation (R9, F20-AL1/AL2/AL3): derived alerts, attributed acts, a clock in code ---")
+    from datetime import datetime as _datetime, timedelta as _timedelta
+
+    from fmcg_forecast.alerts.service import AlertService
+
+    alerting = AlertService(store)
+    menon = alerting.enter_subscription(
+        subscriber="r.menon", role="desk_head",
+        entered_on=date(2025, 12, 1),
+        commodities=["soybean", "wheat"], markets=[],
+        kinds=["buy_signal", "event_window", "price_move",
+               "accuracy_degraded", "coverage_collapse"],
+        min_severity="minor",
+        note="desk head watch: the two live procurement series",
+    )
+    sharma = alerting.enter_subscription(
+        subscriber="a.sharma", role="analyst",
+        entered_on=date(2025, 12, 1),
+        commodities=["chili", "coffee"], markets=[],
+        kinds=["accuracy_degraded", "coverage_collapse"],
+        min_severity="minor",
+        note="model-risk watch: accuracy kinds only",
+    )
+    print(f"  subscriptions entered as artefacts: {menon.subscription_id} "
+          f"(r.menon, soybean + wheat, all kinds) and "
+          f"{sharma.subscription_id} (a.sharma, chili + coffee, "
+          "accuracy kinds) — desk-entered, superseded by link, "
+          "never edited")
+    swept_at = _datetime(2026, 1, 5, 9, 0)
+    summary = alerting.sweep(swept_at)
+    print(f"  sweep at {swept_at.isoformat()}: "
+          f"{summary['crossings_computed']} price crossings computed "
+          f"from the observation series, "
+          f"{summary['alerts_raised_count']} alerts raised, "
+          f"{summary['unmatched_signals']} struck signal(s) matched "
+          "no subscription (chili's signal — nobody watches chili "
+          "signals, and the sweep says so)")
+    for alert in alerting.list_alerts():
+        print(f"    [{alert.kind:<18}] {alert.commodity} at "
+              f"{alert.market}: {alert.severity} — trigger "
+              f"{alert.trigger_id} ({alert.subscriber})")
+    soybean_alert = next(
+        a for a in alerting.list_alerts(commodity="soybean")
+        if a.kind == "buy_signal"
+    )
+    wheat_alert = next(
+        a for a in alerting.list_alerts(commodity="wheat")
+        if a.kind == "buy_signal"
+    )
+    ack = alerting.acknowledge(
+        soybean_alert.alert_id, actor="r.menon", role="desk_head",
+        acted_at=swept_at + _timedelta(hours=1),
+        note="seen — coverage plan already prices this move",
+    )
+    print(f"  act {ack.act_id}: r.menon acknowledged the soybean "
+          f"signal alert an hour after it was raised")
+    month_later = swept_at + _timedelta(days=30)
+    acked_view = alerting.alert_view(soybean_alert.alert_id, month_later)
+    open_view = alerting.alert_view(wheat_alert.alert_id, month_later)
+    print(f"  a month later the acknowledged alert still reads "
+          f"'{acked_view['state']['state']}' (the clock stopped at "
+          f"the ack) while the untouched wheat alert reads "
+          f"'{open_view['state']['state']}' at escalation level "
+          f"{open_view['state']['escalation_level']}, sitting with "
+          f"{open_view['state']['current_holder']} — escalation is "
+          "the fold of the acts and the pack's windows, derived "
+          "at read")
+    digest = alerting.build_digest(menon.subscription_id, date(2026, 1, 5))
+    print(f"  daily digest {digest.digest_id} for r.menon carries "
+          f"exactly his {len(digest.alert_ids)} alert(s) of "
+          f"2026-01-05 — re-derived from the stored alerts with "
+          f"{len(alerting.digest_view(digest.digest_id)['problems'])} "
+          "problems")
+    problems = alerting.verify_all()
+    print(f"  re-performance of the whole alert set against a fresh "
+          f"derivation: {len(problems)} problems")
     print(f"sealed truth rows stored: {truth_store.count()} (readable only via the truth store)")
     return 0
 

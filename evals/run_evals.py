@@ -190,6 +190,29 @@ F20-PO2/PO3), also zero-tolerance:
   so a foreign series is a named row, never a crash and never
   a silent drop.
 
+Round 9 counters (alerting, subscriptions and escalation,
+F20-AL1/AL2/AL3), also zero-tolerance:
+
+- alert_orphan_errors: a stored alert whose subscription or
+  triggering artefact does not resolve in the store — an alert
+  without its trigger cannot exist.
+- alert_derivation_errors: a stored alert that does not
+  re-perform field-for-field against a fresh derivation, a
+  derived alert that was never raised, or a struck signal the
+  sweep's unmatched account does not reconcile.
+- alert_state_fold_errors: an accuracy episode with more than
+  one open alert, a degraded or collapsed record left without
+  its open alert, or an act whose content address does not
+  recompute.
+- alert_escalation_errors: the escalation fold disagreeing
+  with the pack's windows on a fixture clock — an
+  unacknowledged alert not climbing at the stated times, or
+  an acknowledged one climbing anyway.
+- alert_digest_errors: a digest whose alert set is not
+  exactly its subscriber's alerts for its date.
+- alert_dedup_errors: a repeated sweep raising an alert that
+  already stands — a crossing must fire exactly once.
+
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
 
@@ -226,6 +249,7 @@ def truth_isolation_violations() -> int:
         + list((base / "dashboards").rglob("*.py"))
         + list((base / "signals").rglob("*.py"))
         + list((base / "planning").rglob("*.py"))
+        + list((base / "alerts").rglob("*.py"))
     )
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -303,6 +327,12 @@ def main() -> int:
         "planning_provenance_errors": 0,
         "planning_ranking_errors": 0,
         "board_foreign_series_errors": 0,
+        "alert_orphan_errors": 0,
+        "alert_derivation_errors": 0,
+        "alert_state_fold_errors": 0,
+        "alert_escalation_errors": 0,
+        "alert_digest_errors": 0,
+        "alert_dedup_errors": 0,
     }
 
     # --- planted events, measured seasonally-matched ---------------
@@ -1729,7 +1759,187 @@ def main() -> int:
     ):
         counters["board_foreign_series_errors"] += 1
 
-    print("Round 8 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio + R7 prompt-to-dashboard + R8 buy signals & coverage planning)")
+    # --- alerting, subscriptions and escalation (R9, F20-AL1/AL2/AL3) ---
+    from datetime import datetime as _datetime
+
+    from fmcg_forecast.alerts.engine import (
+        compute_crossings as _compute_crossings,
+    )
+    from fmcg_forecast.alerts.engine import fold_state as _fold_state
+    from fmcg_forecast.alerts.pack import load_alert_pack as _load_alert_pack
+    from fmcg_forecast.alerts.service import AlertService as _AlertService
+    from fmcg_forecast.alerts.verify import (
+        verify_alert as _verify_alert,
+    )
+    from fmcg_forecast.alerts.verify import (
+        verify_alert_set as _verify_alert_set,
+    )
+    from fmcg_forecast.alerts.verify import verify_digest as _verify_digest
+
+    _alert_pack = _load_alert_pack()
+    _alerting = _AlertService(store, _alert_pack)
+
+    # A planted price step on the fixture series: 2000 flat, then
+    # 2240 from day 21 — exactly one 7-day crossing of +12.0%.
+    _step_start = _date(2025, 12, 1)
+    store.insert_observations(
+        [
+            _Obs(
+                commodity="fixture_grain", market="fixture_market",
+                obs_date=_step_start + _timedelta(days=i),
+                driver="modal_price",
+                value=2000.0 if i < 20 else 2240.0,
+            )
+            for i in range(30)
+        ]
+    )
+    _fixture_crossings = [
+        c for c in _compute_crossings(store, _alert_pack)
+        if c.commodity == "fixture_grain"
+    ]
+    if len(_fixture_crossings) != 1 or (
+        _fixture_crossings[0].move_pct != 12.0
+    ):
+        counters["alert_derivation_errors"] += 1
+
+    _eval_sub = _alerting.enter_subscription(
+        subscriber="eval.desk", role="desk_head",
+        entered_on=_date(2025, 1, 1), commodities=[], markets=[],
+        kinds=[
+            "buy_signal", "event_window", "price_move",
+            "accuracy_degraded", "coverage_collapse",
+        ],
+        min_severity="minor",
+    )
+    _T0 = _datetime(2026, 1, 5, 9, 0)
+    _sweep1 = _alerting.sweep(_T0)
+    _alerts_after_first = len(_alerting.list_alerts())
+    _sweep2 = _alerting.sweep(_T0 + _timedelta(hours=1))
+    if (
+        _sweep2["alerts_raised_count"] != 0
+        or len(_alerting.list_alerts()) != _alerts_after_first
+    ):
+        counters["alert_dedup_errors"] += 1
+
+    # The fixture crossing raised exactly one alert.
+    _fixture_move_alerts = [
+        a for a in _alerting.list_alerts(commodity="fixture_grain")
+        if a.kind == "price_move"
+    ]
+    if len(_fixture_move_alerts) != 1 or (
+        _fixture_move_alerts[0].severity != "critical"
+    ):
+        counters["alert_derivation_errors"] += 1
+
+    # Every stored alert re-performs; orphans and derivation
+    # disagreements are counted separately.
+    from fmcg_forecast.alerts.engine import (
+        derive_candidates as _derive_candidates,
+    )
+
+    _candidates = _derive_candidates(store, _alert_pack)
+    for _alert in _alerting.list_alerts():
+        for _problem in _verify_alert(store, _alert, _candidates):
+            if "orphan" in _problem:
+                counters["alert_orphan_errors"] += 1
+            else:
+                counters["alert_derivation_errors"] += 1
+    for _problem in _verify_alert_set(store, _alert_pack):
+        if "episode" in _problem or "content id mismatch" in _problem:
+            counters["alert_state_fold_errors"] += 1
+        elif "orphan" in _problem:
+            counters["alert_orphan_errors"] += 1
+        else:
+            counters["alert_derivation_errors"] += 1
+
+    # The sweep's unmatched account reconciles with the alerts of
+    # record: a struck signal is either alerted under some
+    # subscription or named unmatched — never silently dropped.
+    _alerted_signals = {
+        a.trigger_id
+        for a in _alerting.list_alerts()
+        if a.kind == "buy_signal"
+    }
+    _expected_unmatched = {
+        s.signal_id
+        for s in store.list_buy_signals()
+        if s.signal_id not in _alerted_signals
+    }
+    if set(_sweep1["unmatched_signal_ids"]) != _expected_unmatched:
+        counters["alert_derivation_errors"] += 1
+
+    # Degradation: one alert per degraded record on the ledger.
+    _degraded_records = [
+        r for r in store.list_accuracy_records() if r.degraded
+    ]
+    _degraded_alerts = [
+        a
+        for a in _alerting.list_alerts(
+            subscription_id=_eval_sub.subscription_id
+        )
+        if a.kind == "accuracy_degraded"
+    ]
+    if len(_degraded_alerts) != len(_degraded_records):
+        counters["alert_state_fold_errors"] += 1
+
+    # The escalation clock on a fixture timeline: an
+    # unacknowledged degraded alert (major — windows 24h, 72h)
+    # climbs at the stated times; an acknowledged signal alert
+    # never climbs.
+    if _degraded_alerts:
+        _esc_alert = _degraded_alerts[0]
+        _at_25h = _fold_state(
+            _esc_alert, [], _T0 + _timedelta(hours=25), _alert_pack
+        )
+        _at_97h = _fold_state(
+            _esc_alert, [], _T0 + _timedelta(hours=97), _alert_pack
+        )
+        if not (
+            _at_25h["state"] == "escalated"
+            and _at_25h["escalation_level"] == 1
+            and _at_25h["current_holder"] == "desk_head"
+            and _at_97h["escalation_level"] == 2
+            and _at_97h["current_holder"] == "procurement_lead"
+        ):
+            counters["alert_escalation_errors"] += 1
+    _signal_alerts = [
+        a
+        for a in _alerting.list_alerts(
+            subscription_id=_eval_sub.subscription_id
+        )
+        if a.kind == "buy_signal" and a.commodity == "soybean"
+    ]
+    if _signal_alerts:
+        _ack_alert = _signal_alerts[0]
+        _alerting.acknowledge(
+            _ack_alert.alert_id, actor="eval.desk", role="desk_head",
+            acted_at=_T0 + _timedelta(hours=2),
+        )
+        _folded = _fold_state(
+            _ack_alert,
+            store.list_alert_acts(_ack_alert.alert_id),
+            _T0 + _timedelta(days=30),
+            _alert_pack,
+        )
+        if _folded["state"] != "acknowledged":
+            counters["alert_escalation_errors"] += 1
+
+    # The digest carries exactly the subscriber's day.
+    _digest = _alerting.build_digest(
+        _eval_sub.subscription_id, _date(2026, 1, 5)
+    )
+    counters["alert_digest_errors"] += len(_verify_digest(store, _digest))
+    _expected_digest = sorted(
+        a.alert_id
+        for a in _alerting.list_alerts(
+            subscription_id=_eval_sub.subscription_id
+        )
+        if a.raised_on == _date(2026, 1, 5)
+    )
+    if _digest.alert_ids != _expected_digest:
+        counters["alert_digest_errors"] += 1
+
+    print("Round 9 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio + R7 prompt-to-dashboard + R8 buy signals & coverage planning + R9 alerting, subscriptions & escalation)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]

@@ -136,6 +136,28 @@ class AlertService:
                 f"is {', '.join(self.pack.severities)}"
             )
         previous = self.head_subscription(subscriber)
+        if previous is not None and (
+            previous.role,
+            previous.entered_on,
+            previous.commodities,
+            previous.markets,
+            previous.kinds,
+            previous.min_severity,
+            previous.note,
+            previous.pack_version,
+        ) == (
+            role,
+            entered_on,
+            sorted(commodities),
+            sorted(markets),
+            sorted(kinds),
+            min_severity,
+            note,
+            self.pack.version,
+        ):
+            # Re-entering the standing statement lands on the
+            # stored artefact — a no-op, never a supersession.
+            return previous
         subscription = AlertSubscription(
             subscription_id="SUB-pending",
             subscriber=subscriber,

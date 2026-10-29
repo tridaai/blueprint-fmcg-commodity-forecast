@@ -66,8 +66,14 @@ def verify_crossing(crossing) -> list[str]:
     return problems
 
 
-def verify_alert(store: Store, alert: AlertInstance) -> list[str]:
-    """Return the list of problems with one stored alert."""
+def verify_alert(
+    store: Store, alert: AlertInstance, candidates: list | None = None
+) -> list[str]:
+    """Return the list of problems with one stored alert.
+
+    ``candidates`` is the derivation the caller already ran (the
+    set verifier runs one); a lone caller leaves it None and the
+    derivation runs here."""
     problems: list[str] = []
     expected_id = alert_content_id(
         alert.subscription_id, alert.kind, alert.trigger_id
@@ -221,6 +227,36 @@ def verify_alert(store: Store, alert: AlertInstance) -> list[str]:
             "scope note missing or altered: every alert carries "
             "the signal-only scope note on its face"
         )
+    if alert.kind not in ACCURACY_KINDS:
+        # Full re-performance: the alert must equal the candidate
+        # derivation produces for its (subscription, kind,
+        # trigger), field for field (raised time aside — that is
+        # the sweep's, and the acts grade it).
+        if candidates is None:
+            candidates = derive_candidates(store, pack)
+        match = next(
+            (c for c in candidates if c.alert_id == alert.alert_id), None
+        )
+        if match is None:
+            problems.append(
+                "the alert does not derive from the record — no "
+                "candidate matches its subscription, kind and trigger"
+            )
+        else:
+            for field, expected in (
+                ("subscriber", match.subscription.subscriber),
+                ("commodity", match.commodity),
+                ("market", match.market),
+                ("severity", match.severity),
+                ("trigger_summary", match.trigger_summary),
+            ):
+                if getattr(alert, field) != expected:
+                    problems.append(
+                        f"field {field} differs on re-performance: "
+                        f"stored {getattr(alert, field)!r}, derived "
+                        f"{expected!r} — the alert was altered after "
+                        "it was raised"
+                    )
     return problems
 
 
@@ -231,12 +267,12 @@ def verify_alert_set(store: Store, pack=None) -> list[str]:
     pack = pack or _load()
     problems: list[str] = []
     stored = store.list_alerts()
+    candidates = derive_candidates(store, pack)
     for alert in stored:
         problems.extend(
             f"alert {alert.alert_id}: {p}"
-            for p in verify_alert(store, alert)
+            for p in verify_alert(store, alert, candidates)
         )
-    candidates = derive_candidates(store, pack)
     derived_ids = {c.alert_id for c in candidates}
     stored_ids = {a.alert_id for a in stored}
 
