@@ -509,6 +509,75 @@ and a frozen `constraints.txt` · multi-stage non-root Docker.
   state named on the signal's face, and a requirement plan to
   exposure + ranked options on both price bases.
 
+## What Round 9 adds
+
+- **Subscriptions** — the desk's own stated watch, entered as
+  **desk-entered artefacts** in the plan idiom: a named
+  subscriber and role, catalogue scope (commodities, markets),
+  the alert kinds watched and a **severity floor**. A change
+  is a new artefact **superseding by link**; re-entering the
+  standing statement is a no-op. There is no silent edit and
+  no code config.
+- **Alerts, derived never authored** — a sweep derives alerts
+  from artefacts of record under a **versioned alert pack**
+  and stores only the ones that do not exist yet. An alert's
+  content address is its (subscription, kind, triggering
+  artefact), so **a crossing fires exactly once**, however
+  many times the sweep runs. Five kinds: **buy signals**
+  (severity from the pack's value map, raised to critical
+  when a buy_now's drift clears the critical drift bar);
+  **event windows** (one alert per declared event per
+  subscription, however many signals reference it — the
+  event-window dedup); **price moves** (crossings *computed*
+  from the observation series: a stated 7-day window move
+  clearing the pack's bar where the preceding window did
+  not — one crossing per excursion, pinned to the pair of
+  observations that decided it); **accuracy degradation**
+  (a ledger record over the degraded bar) and **coverage
+  collapse** (a record under the pack's coverage floor),
+  both raised **once per open episode** — a still-degraded
+  replacement record does not re-fire, and the episode
+  reopens only when a named act closes the alert as
+  resolved or the record itself recovers. A trigger dated
+  before the subscription was entered never raises. Signals
+  matching no subscription raise nothing and are **counted
+  in the sweep's own summary** — absence is a reported
+  outcome, not an oversight. Every alert carries the
+  signal-only scope note on its face: no trade is placed.
+- **Acts and the escalation clock** — acknowledgement and
+  closure are **attributed insert-only acts**; closure must
+  name a reason from the pack's stated vocabulary. An
+  alert's state is **never stored**: reads fold the acts
+  plus the pack's escalation windows — an unacknowledged
+  alert climbs the stated ladder (subscriber → desk head →
+  procurement lead) as each window fully elapses, an
+  acknowledgement **stops the clock at the rung it had
+  reached**, and escalation is provable from the acts, not
+  a background job's say-so. An alert over a superseded
+  signal is **marked superseded on read**, never quietly
+  dropped. A **daily digest** artefact carries exactly its
+  subscriber's alerts for its date — re-derived from the
+  stored alerts, never assembled by hand. The verifier
+  re-performs every alert against a fresh derivation, field
+  for field, and grades the episode discipline across the
+  set. Degradation badging itself rides on the accuracy
+  artefact as it already did (board rows, dashboard badges)
+  — R9 adds the subscriber notification, not a second badge.
+- **Surfaces** — migration 0009 (both dialects); `GET
+  /alerts/pack`, `POST /alerts/subscriptions`, `GET
+  /alerts/subscriptions`, `POST /alerts/sweep`, `GET
+  /alerts/crossings`, `GET /alerts` + `/{id}` +
+  `/{id}/verify`, `POST /alerts/{id}/acknowledge`, `POST
+  /alerts/{id}/close`, `POST /alerts/digests`, `GET
+  /alerts/digests/{id}`; the `fmcg-agent-alerts` CLI. Alerts
+  do **not** become dashboard panels — the R7 catalogue
+  stands closed, by the same reasoning as signals in R8.
+  The demo enters two watches, sweeps, and walks one alert
+  acknowledged in time (its clock stops) and one left
+  untouched (escalated to the procurement lead a month
+  later), closing on a digest and a whole-set
+  re-performance.
+
 ## Honest status
 
 - **Built and gated in R1:** the spine, generator + manifest, store port +
@@ -603,6 +672,16 @@ and a frozen `constraints.txt` · multi-stage non-root Docker.
   to adopted forks), the board's signals section, migration
   0008, signal + planning API surfaces and the
   `fmcg-agent-signals` / `fmcg-agent-planning` CLIs, demo walk.
+- **Built and gated in R9:** the alert pack (kinds, severity
+  judgements, the price-move window and bar, the coverage
+  floor, the escalation ladder and windows, the close-reason
+  vocabulary — all versioned data), desk-entered subscriptions
+  with supersession by link, computed price crossings, derived
+  alerts pinned to their triggers with exact-once dedup,
+  accuracy episodes, attributed acknowledge/close acts, the
+  escalation fold, daily digests, the whole-set re-performance
+  verifier, migration 0009, the alerts API surface and the
+  `fmcg-agent-alerts` CLI, demo walk.
   Eval gate v8 adds zero-tolerance counters for degraded-series
   strong signals, signal re-performance, exposure arithmetic,
   desk/market provenance mixing and off-criteria ranking; the
@@ -718,7 +797,16 @@ src/fmcg_forecast/
     lineage.py     the desk_entered terminal fact
     service.py     enter / assess / verify — one workflow
     cli.py         the fmcg-agent-planning command line
-migrations/        0001-0008 SQL, sqlite + postgres dialects
+  alerts/          the alerting package (truth-isolated, R9):
+    pack.py        the alert pack: kinds, severity judgements,
+                   price-move window/bar, coverage floor,
+                   escalation ladder + windows, close reasons
+    models.py      subscription / crossing / alert / act / digest
+    engine.py      crossings, derivation, the state fold
+    verify.py      per-alert + whole-set re-performance
+    service.py     subscribe / sweep / act / digest — one workflow
+    cli.py         the fmcg-agent-alerts command line
+migrations/        0001-0009 SQL, sqlite + postgres dialects
 scripts/           demo.py, local_harness.py
 evals/             the eval gate
 docs/              architecture.md

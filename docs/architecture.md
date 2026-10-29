@@ -204,6 +204,25 @@ LangGraph state machine whose transitions are stored artefacts:
   catalogue, which stays closed versioned data. No trade or
   purchase is ever placed — both artefact families state the
   scope line on their face.
+- **alert** (R9, landed): alerting, subscriptions and
+  escalation (F20-AL1/AL2/AL3). The desk's watch enters as
+  desk-entered subscription artefacts, superseded by link.
+  A sweep derives alerts from artefacts of record — struck
+  signals, declared event windows, price crossings computed
+  from the observation series under the alert pack's stated
+  window and bar, and the accuracy ledger's degraded and
+  coverage-collapsed records (one alert per open episode) —
+  each alert content-addressed by (subscription, kind,
+  trigger), so a crossing fires exactly once, and each
+  carrying the trigger facts that decided its severity on
+  its face. Acknowledgement and closure are attributed acts;
+  state is a fold of the acts plus the pack's escalation
+  windows, derived at read, so an unacknowledged alert's
+  climb up the ladder is provable from the record. Daily
+  digests carry exactly a subscriber's alerts for their
+  date, and the verifier re-performs the whole set against
+  a fresh derivation. Alerts stay out of the dashboard
+  panel catalogue for the same reason signals did.
 
 ## Failure posture
 
