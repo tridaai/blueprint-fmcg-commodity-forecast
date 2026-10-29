@@ -23,7 +23,14 @@ becomes a stated dashboard spec (catalogue panels or named gap
 panels), specs save as named views and assemble into verified
 static pages whose every figure carries its lineage to stored
 facts in a provenance appendix, plus the morning desk board —
-the exception inbox derived from artefacts only. Every
+the exception inbox derived from artefacts only. Round 8 adds
+the buy-window signals (a computed buy_now / phased / wait call
+per series under a versioned signal pack, reasoning on its face,
+degraded series capped by rule) and the coverage & exposure
+planner (the desk's own requirement plans — desk-entered
+artefacts with a lineage class of their own — priced against
+pinned forecasts or adopted scenario forks, with ranked
+purchase options). Every
 response carries the request id the logging middleware assigned,
 so a figure on a desk screen can be traced to the exact stored
 rows behind it.
@@ -73,6 +80,15 @@ from fmcg_forecast.modelport import (
     ModelPort,
     OfflineModel,
 )
+from fmcg_forecast.planning.models import PlanLine
+from fmcg_forecast.planning.pack import load_planning_pack
+from fmcg_forecast.planning.service import (
+    PlanningError,
+    PlanningNotFoundError,
+    PlanningService,
+    PlanningStateError,
+    PlanningValidationError,
+)
 from fmcg_forecast.scenarios.models import LeverApplication
 from fmcg_forecast.scenarios.pack import load_scenario_pack
 from fmcg_forecast.scenarios.service import (
@@ -86,6 +102,12 @@ from fmcg_forecast.scenarios.service import (
 from fmcg_forecast.sentiment.service import (
     SentimentConflictError,
     SentimentService,
+)
+from fmcg_forecast.signals.pack import load_signal_pack
+from fmcg_forecast.signals.service import (
+    SignalError,
+    SignalNotFoundError,
+    SignalService,
 )
 from fmcg_forecast.store import SqlStore
 
@@ -167,6 +189,25 @@ class AssembleDashboardRequest(BaseModel):
     assembled_on: date | None = None
 
 
+class ComputeSignalRequest(BaseModel):
+    commodity: str
+    market: str
+
+
+class EnterPlanRequest(BaseModel):
+    commodity: str
+    market: str
+    entered_by: str
+    entered_on: date | None = None
+    opening_stock_tonnes: float = 0.0
+    lines: list[PlanLine]
+    note: str = ""
+
+
+class AssessPlanRequest(BaseModel):
+    basis: str = "official_forecast"
+
+
 def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     model_port = model or OfflineModel()
     sentiment = SentimentService(store, model_port)
@@ -188,14 +229,17 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     dashboard_service = DashboardService(
         store, model_port, event_service, sentiment
     )
+    signal_service = SignalService(store)
+    planning_service = PlanningService(store, signal_service)
     app = FastAPI(
         title="FMCG Commodity Forecast — Operations API",
-        version="0.7.0",
+        version="0.8.0",
         description="Read surfaces for the commodity price & driver store, "
         "the governed forecast surface, the backtest/accuracy surface, "
         "the sentiment surface, the event registry, the scenario "
-        "studio, and the dashboard assembler with the morning desk "
-        "board.",
+        "studio, the dashboard assembler with the morning desk "
+        "board, the buy-window signals, and the coverage & "
+        "exposure planner.",
     )
 
     @app.middleware("http")
@@ -911,5 +955,121 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
         except DashboardValidationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return HTMLResponse(content=view["html"])
+
+    # -- buy-window signals (R8, F20-PO2) -------------------------------
+
+    @app.get("/signals/pack")
+    def signal_pack() -> dict:
+        return load_signal_pack().model_dump(mode="json")
+
+    @app.post("/signals/compute")
+    def compute_signal(body: ComputeSignalRequest) -> dict:
+        try:
+            signal = signal_service.compute_for_series(
+                body.commodity, body.market
+            )
+        except SignalNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except SignalError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return signal.model_dump(mode="json")
+
+    @app.get("/signals")
+    def list_signals(
+        commodity: str | None = Query(None),
+        market: str | None = Query(None),
+    ) -> dict:
+        found = signal_service.list_signals(commodity, market)
+        return {"signals": [s.model_dump(mode="json") for s in found]}
+
+    @app.get("/signals/{signal_id}")
+    def get_signal(signal_id: str) -> dict:
+        try:
+            return signal_service.signal_view(signal_id)
+        except SignalNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/signals/{signal_id}/verify")
+    def verify_signal_endpoint(signal_id: str) -> dict:
+        try:
+            problems = signal_service.verify_stored(signal_id)
+        except SignalNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"signal_id": signal_id, "problems": problems}
+
+    # -- coverage & exposure planning (R8, F20-PO3) ---------------------
+
+    @app.get("/planning/pack")
+    def planning_pack() -> dict:
+        return load_planning_pack().model_dump(mode="json")
+
+    @app.post("/planning/plans", status_code=201)
+    def enter_plan(body: EnterPlanRequest) -> dict:
+        try:
+            plan = planning_service.enter_plan(
+                commodity=body.commodity,
+                market=body.market,
+                entered_by=body.entered_by,
+                entered_on=body.entered_on or date.today(),
+                opening_stock_tonnes=body.opening_stock_tonnes,
+                lines=body.lines,
+                note=body.note,
+            )
+        except PlanningValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return planning_service.plan_view(plan.plan_id)
+
+    @app.get("/planning/plans")
+    def list_plans(
+        commodity: str | None = Query(None),
+        market: str | None = Query(None),
+    ) -> dict:
+        found = planning_service.list_plans(commodity, market)
+        return {"plans": [p.model_dump(mode="json") for p in found]}
+
+    @app.get("/planning/plans/{plan_id}")
+    def get_plan(plan_id: str) -> dict:
+        try:
+            return planning_service.plan_view(plan_id)
+        except PlanningNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/planning/plans/{plan_id}/assess")
+    def assess_plan(plan_id: str, body: AssessPlanRequest) -> dict:
+        try:
+            assessment = planning_service.assess(plan_id, basis=body.basis)
+        except PlanningNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PlanningValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except PlanningStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except PlanningError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return assessment.model_dump(mode="json")
+
+    @app.get("/planning/assessments")
+    def list_assessments(plan_id: str | None = Query(None)) -> dict:
+        found = planning_service.list_assessments(plan_id)
+        return {
+            "assessments": [a.model_dump(mode="json") for a in found]
+        }
+
+    @app.get("/planning/assessments/{assessment_id}")
+    def get_assessment(assessment_id: str) -> dict:
+        try:
+            return planning_service.assessment_view(assessment_id)
+        except PlanningNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/planning/assessments/{assessment_id}/verify")
+    def verify_assessment_endpoint(assessment_id: str) -> dict:
+        try:
+            problems = planning_service.verify_assessment_stored(
+                assessment_id
+            )
+        except PlanningNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"assessment_id": assessment_id, "problems": problems}
 
     return app
