@@ -4,7 +4,10 @@ The separation rule is structural: a desk figure's walk is
 exactly one fact — the ``desk_entered`` terminal fact naming the
 plan, its enterer and its date. A market figure's walk is the
 R7 forecast walk (or the signal walk) and never contains a desk
-fact. A mixed figure — the desk's tonnes valued at market
+fact; on the adopted-scenario basis the price walk is the R7
+scenario walk — through the run artefact that holds the fork,
+to the base forecast and its stored facts — because the fork
+itself is not a forecast artefact on record. A mixed figure — the desk's tonnes valued at market
 prices — carries the desk fact alongside the market walk, so a
 reader can see both halves of where the number came from, and
 the verifier counts the desk facts on every walk.

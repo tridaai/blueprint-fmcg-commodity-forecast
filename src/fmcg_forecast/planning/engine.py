@@ -17,8 +17,7 @@ from __future__ import annotations
 import calendar
 from datetime import date
 
-from fmcg_forecast.dashboards.lineage import forecast_lineage
-from fmcg_forecast.dashboards.models import LineageFact
+from fmcg_forecast.dashboards.lineage import forecast_lineage, scenario_lineage
 from fmcg_forecast.forecast.models import Forecast
 from fmcg_forecast.planning.lineage import plan_fact
 from fmcg_forecast.planning.models import (
@@ -315,21 +314,26 @@ def _build_figures(
     options: list[PurchaseOption],
 ) -> list[PlanningFigure]:
     desk_walk = [plan_fact(plan)]
-    price_walk = forecast_lineage(store, price_source)
     if basis_kind == "adopted_scenario" and scenario_id is not None:
-        price_walk = [
-            LineageFact(
-                kind="scenario_run",
-                ref=scenario_id,
-                detail=(
-                    "the adopted scenario whose fork prices this "
-                    "assessment — the figures below walk through "
-                    "the fork, badged scenario-based"
-                ),
-                source="scenario studio (adopted view)",
-                fact_date=price_source.as_of,
+        # The fork is not a forecast artefact on record — it
+        # lives inside the scenario run, never in the desk's
+        # forecast record — so the price walk is the R7 scenario
+        # walk (run -> base forecast -> the base series' stored
+        # facts), and the run is the figures' artefact of record,
+        # exactly as on a dashboard's scenario panel. Walking the
+        # fork through forecast_lineage instead would name a
+        # forecast the store does not hold as a forecast.
+        run = store.get_scenario(scenario_id)
+        if run is None:
+            raise PlanningError(
+                f"scenario {scenario_id} is not in the store — a "
+                "scenario-based assessment cannot state its lineage"
             )
-        ] + price_walk
+        price_walk = scenario_lineage(store, run)
+        price_artefact_id = run.scenario_id
+    else:
+        price_walk = forecast_lineage(store, price_source)
+        price_artefact_id = price_source.forecast_id
     mixed_walk = desk_walk + price_walk
 
     figures: list[PlanningFigure] = [
@@ -349,19 +353,19 @@ def _build_figures(
             key="coverage_days",
             label="Coverage days at the plan's average daily burn",
             value=coverage_days, unit="days", basis="mixed",
-            artefact_id=price_source.forecast_id, lineage=mixed_walk,
+            artefact_id=price_artefact_id, lineage=mixed_walk,
         ),
         PlanningFigure(
             key="total_uncovered_tonnes",
             label="Uncovered tonnes inside the horizon",
             value=total_uncovered, unit="tonnes", basis="mixed",
-            artefact_id=price_source.forecast_id, lineage=mixed_walk,
+            artefact_id=price_artefact_id, lineage=mixed_walk,
         ),
         PlanningFigure(
             key="total_exposure_inr",
             label="Uncovered exposure at forecast P50",
             value=total_exposure, unit="INR", basis="mixed",
-            artefact_id=price_source.forecast_id, lineage=mixed_walk,
+            artefact_id=price_artefact_id, lineage=mixed_walk,
         ),
         PlanningFigure(
             key="signal",
@@ -380,7 +384,7 @@ def _build_figures(
                         f"Uncovered exposure — {m.month.strftime('%B %Y')}"
                     ),
                     value=m.exposure_inr, unit="INR", basis="mixed",
-                    artefact_id=price_source.forecast_id, lineage=mixed_walk,
+                    artefact_id=price_artefact_id, lineage=mixed_walk,
                 )
             )
     for option in options:
@@ -389,7 +393,7 @@ def _build_figures(
                 key=f"option_{option.name}_expected_cost",
                 label=f"Option {option.name} — expected cost (rank {option.rank})",
                 value=option.cost_at_p50_inr, unit="INR", basis="mixed",
-                artefact_id=price_source.forecast_id, lineage=mixed_walk,
+                artefact_id=price_artefact_id, lineage=mixed_walk,
             )
         )
         figures.append(
@@ -397,7 +401,7 @@ def _build_figures(
                 key=f"option_{option.name}_adverse_cost",
                 label=f"Option {option.name} — adverse cost (P90)",
                 value=option.cost_at_p90_inr, unit="INR", basis="mixed",
-                artefact_id=price_source.forecast_id, lineage=mixed_walk,
+                artefact_id=price_artefact_id, lineage=mixed_walk,
             )
         )
     return figures
