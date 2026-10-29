@@ -183,6 +183,12 @@ F20-PO2/PO3), also zero-tolerance:
 - planning_ranking_errors: an assessment whose options are not
   in the planning pack's ranking order (expected cost, then
   adverse cost, then name) with ranks 1..n.
+- board_foreign_series_errors: the morning board failing to
+  name a stored artefact from a series outside the catalogue
+  (the fixture series' draft forecasts) as a pending-gate row
+  badged not_in_catalogue — the board reads the whole record,
+  so a foreign series is a named row, never a crash and never
+  a silent drop.
 
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
@@ -296,6 +302,7 @@ def main() -> int:
         "planning_exposure_errors": 0,
         "planning_provenance_errors": 0,
         "planning_ranking_errors": 0,
+        "board_foreign_series_errors": 0,
     }
 
     # --- planted events, measured seasonally-matched ---------------
@@ -1704,6 +1711,23 @@ def main() -> int:
             store.get_buy_signal(_row.artefact_id) is None
         ):
             counters["signal_reperformance_errors"] += 1
+
+    # The board names the fixture series' pending gates as
+    # recorded: both hand-computed fixture forecasts are draft
+    # artefacts from a series outside the catalogue, and each
+    # must appear as a pending-gate row badged not_in_catalogue.
+    _fixture_rows = [
+        _row for _row in _board2.rows
+        if _row.kind == "pending_gate"
+        and _row.commodity == "fixture_grain"
+    ]
+    if {_row.artefact_id for _row in _fixture_rows} != {
+        _rising.forecast_id, _degraded_fx.forecast_id
+    } or any(
+        _row.figures.get("catalogue") != "not_in_catalogue"
+        for _row in _fixture_rows
+    ):
+        counters["board_foreign_series_errors"] += 1
 
     print("Round 8 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio + R7 prompt-to-dashboard + R8 buy signals & coverage planning)")
     for name, value in counters.items():

@@ -22,6 +22,8 @@ from fastapi.testclient import TestClient
 from fmcg_forecast.api import create_app
 from fmcg_forecast.backtest.harness import run_all as run_backtest_harness
 from fmcg_forecast.backtest.pack import load_accuracy_pack
+from fmcg_forecast.dashboards.board import build_board
+from fmcg_forecast.dashboards.pack import load_dashboard_pack
 from fmcg_forecast.dashboards.service import DashboardService
 from fmcg_forecast.events.service import EventService
 from fmcg_forecast.forecast.engine import forecast_content_id
@@ -695,6 +697,89 @@ def test_scenario_basis_assessment_is_pinned_and_badged(env):
     )
     with pytest.raises(PlanningStateError):
         planning.assess(wheat_plan.plan_id, basis="adopted_scenario")
+
+
+def test_scenario_basis_lineage_walks_through_the_run(env):
+    # Regression: the scenario-basis price walk once ran the fork
+    # through forecast_lineage, naming the fork as a forecast
+    # artefact — but the fork lives inside the run, never in the
+    # desk's forecast record, so every priced figure failed its
+    # own verifier ("lineage names forecast …, not on record").
+    planning = env["planning"]
+    run = env["scenario_run"]
+    stored_run = env["store"].get_scenario(run.scenario_id)
+    if stored_run.status != "adopted":
+        env["scenarios"].adopt(
+            run.scenario_id, adopter="a.sharma", role="desk head",
+            decided_on=date(2026, 1, 4),
+        )
+    plan = planning.enter_plan(
+        commodity="soybean", market="indore", entered_by="r.menon",
+        entered_on=date(2026, 1, 5), opening_stock_tonnes=40.0,
+        lines=[
+            PlanLine(month=date(2026, 1, 1), required_tonnes=100.0),
+            PlanLine(month=date(2026, 2, 1), required_tonnes=100.0),
+        ],
+    )
+    scenario = planning.assess(plan.plan_id, basis="adopted_scenario")
+    assert verify_assessment(env["store"], scenario) == []
+    priced = [
+        f for f in scenario.figures
+        if f.key not in ("total_required_tonnes", "opening_stock_tonnes",
+                         "signal")
+    ]
+    assert priced
+    for figure in priced:
+        # the run is the artefact of record for fork-priced
+        # figures, as on a dashboard's scenario panel
+        assert figure.artefact_id == run.scenario_id
+        refs = {fact.ref for fact in figure.lineage}
+        assert run.scenario_id in refs
+        assert run.base_forecast_id in refs
+        # the fork is never named as a forecast artefact
+        assert run.fork.forecast_id not in refs
+        assert not any(
+            fact.kind == "forecast" and fact.ref == run.fork.forecast_id
+            for fact in figure.lineage
+        )
+    # the official basis still walks the forecast artefact itself
+    official = planning.assess(plan.plan_id)
+    official_priced = [
+        f for f in official.figures
+        if f.key not in ("total_required_tonnes", "opening_stock_tonnes",
+                         "signal")
+    ]
+    assert official_priced
+    for figure in official_priced:
+        assert figure.artefact_id == official.forecast_id
+
+
+def test_board_names_a_series_outside_the_catalogue(tmp_path):
+    # Regression: the board's pending-gate section resolved every
+    # stored forecast through the catalogue with a bare next();
+    # a draft forecast for a series the catalogue does not name
+    # (the signal engine's fixture series is one — the store
+    # takes any series key) crashed the whole board with
+    # StopIteration. The row must appear, named as recorded.
+    store = build_store(str(tmp_path / "board.db"))
+    fixture = _fixture_forecast(
+        "fixture_grain", "fixture_market", 2100.0, 2010.0, 2190.0,
+        _attachment("measured"),
+    )
+    store.insert_forecast(fixture)
+    board = build_board(
+        store, EventService(store), load_dashboard_pack(), BOARD_DATE
+    )
+    rows = [
+        r for r in board.rows
+        if r.kind == "pending_gate" and r.artefact_id == fixture.forecast_id
+    ]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.commodity == "fixture_grain"
+    assert "fixture_grain" in row.headline
+    assert "outside the desk catalogue" in row.headline
+    assert row.figures["catalogue"] == "not_in_catalogue"
 
 
 # --- surfaces -----------------------------------------------------------------
