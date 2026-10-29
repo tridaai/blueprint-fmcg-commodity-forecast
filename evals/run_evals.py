@@ -159,6 +159,31 @@ Round 7 counters (prompt-to-dashboard, Law 6), also zero-tolerance:
   among the degraded or data-gap rows; or a board rebuild that
   is not the same artefact.
 
+Round 8 counters (buy-window signals + coverage planning,
+F20-PO2/PO3), also zero-tolerance:
+
+- signal_degraded_strong_errors: a signal whose pinned accuracy
+  state is degraded (or unmeasured) carrying a buy_now call —
+  the signal pack caps both at phased, by rule.
+- signal_reperformance_errors: a stored signal the verifier
+  flags on re-performance from its pinned forecast and the
+  store, a hand-computed fixture (rising / degraded) whose
+  engine output differs from the stated expectation, or a
+  signal board row whose artefact does not resolve.
+- planning_exposure_errors: a stored assessment the verifier
+  flags on re-performance (coverage, month pricing, exposure,
+  option costs), a tampered exposure figure the verifier
+  accepts, or a scenario-basis assessment that is not pinned
+  to the adopted run's fork.
+- planning_provenance_errors: a desk figure whose walk is not
+  exactly the desk-entered terminal fact, a market figure whose
+  walk contains a desk-entered fact, a mixed figure without
+  exactly one, or a desk-entered fact appearing anywhere in a
+  dashboard's provenance appendix (market provenance).
+- planning_ranking_errors: an assessment whose options are not
+  in the planning pack's ranking order (expected cost, then
+  adverse cost, then name) with ranks 1..n.
+
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
 
@@ -193,6 +218,8 @@ def truth_isolation_violations() -> int:
         + list((base / "events").rglob("*.py"))
         + list((base / "scenarios").rglob("*.py"))
         + list((base / "dashboards").rglob("*.py"))
+        + list((base / "signals").rglob("*.py"))
+        + list((base / "planning").rglob("*.py"))
     )
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -264,6 +291,11 @@ def main() -> int:
         "dashboard_gap_suppression_errors": 0,
         "dashboard_rerun_diff_errors": 0,
         "dashboard_board_errors": 0,
+        "signal_degraded_strong_errors": 0,
+        "signal_reperformance_errors": 0,
+        "planning_exposure_errors": 0,
+        "planning_provenance_errors": 0,
+        "planning_ranking_errors": 0,
     }
 
     # --- planted events, measured seasonally-matched ---------------
@@ -1441,7 +1473,239 @@ def main() -> int:
     if dashboard_service.board(_date(2026, 2, 15)).board_id != board.board_id:
         counters["dashboard_board_errors"] += 1
 
-    print("Round 7 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio + R7 prompt-to-dashboard)")
+    # --- buy-window signals + coverage planning (R8, F20-PO2/PO3) ---
+    import json as _json
+    import sqlite3 as _sqlite3
+    from datetime import timedelta as _timedelta
+
+    from fmcg_forecast.forecast.engine import forecast_content_id as _fcid
+    from fmcg_forecast.forecast.models import (
+        ATTRIBUTION_ORDER as _ATTR,
+        AccuracyAttachment as _Attachment,
+        BaselineMethod as _Baseline,
+        Forecast as _Forecast,
+        ForecastDay as _FDay,
+        ForecastMethod as _FMethod,
+        HorizonAccuracy as _HAcc,
+        HorizonSummary as _HSum,
+        ResidualMethod as _Resid,
+        SparsityMethod as _Spars,
+    )
+    from fmcg_forecast.models import Observation as _Obs
+    from fmcg_forecast.planning.models import PlanLine as _PlanLine
+    from fmcg_forecast.planning.service import PlanningService as _Planning
+    from fmcg_forecast.planning.verify import (
+        verify_assessment as _verify_assessment,
+    )
+    from fmcg_forecast.signals.service import SignalService as _Signals
+    from fmcg_forecast.signals.verify import verify_signal as _verify_signal
+
+    signal_service = _Signals(store)
+    planning_service = _Planning(store, signal_service)
+
+    # Every series with a head forecast: the signal re-performs,
+    # and the hard caps hold on whatever the engine produced.
+    for _series in (
+        ("soybean", "indore"),
+        ("wheat", "delhi_khari_baoli"),
+        ("chili", "guntur"),
+        ("coffee", "bengaluru"),
+    ):
+        _signal = signal_service.compute_for_series(*_series)
+        counters["signal_reperformance_errors"] += len(
+            _verify_signal(store, _signal)
+        )
+        if (
+            _signal.accuracy_state in ("degraded", "unmeasured")
+            and _signal.value == "buy_now"
+        ):
+            counters["signal_degraded_strong_errors"] += 1
+
+    # Hand-computed fixtures on a synthetic series (the store
+    # takes any series key; the signal engine never consults the
+    # catalogue): spot 2000, flat path to P50 2100 at 30 days.
+    def _fixture_forecast(_state):
+        _days = [
+            _FDay(
+                forecast_date=_date(2025, 12, 31) + _timedelta(days=i + 1),
+                baseline=2100.0, contributions={}, events_adjustment=0.0,
+                p10=2010.0, p50=2100.0, p90=2190.0,
+            )
+            for i in range(90)
+        ]
+        _slices = [
+            _HAcc(
+                horizon_days=h,
+                state=(
+                    "degraded" if (_state == "degraded" and h == 30)
+                    else "measured"
+                ),
+                record_id=f"ACC-EVAL-{h}", n_origins=6, mae=42.0,
+                mape=7.5 if (_state == "degraded" and h == 30) else 2.0,
+                bias=1.0, coverage=0.9,
+            )
+            for h in (7, 30, 90)
+        ]
+        _forecast = _Forecast(
+            forecast_id="FCST-pending", commodity="fixture_grain",
+            market="fixture_market", as_of=_date(2025, 12, 31),
+            engine_version="eval-fixture",
+            method=_FMethod(
+                engine_version="eval-fixture",
+                baseline=_Baseline(
+                    intercept=0.0, trend_per_year=0.0, seasonal_sin=0.0,
+                    seasonal_cos=0.0, anchor_date=_date(2025, 12, 31),
+                    n_obs=300,
+                ),
+                drivers={},
+                residuals=_Resid(
+                    sigma=0.01, rho=0.0, q10=-0.01, q90=0.01,
+                    window_obs=300,
+                ),
+                sparsity=_Spars(
+                    observed_days=300, calendar_days=300, multiplier=1.0
+                ),
+                attribution_order=list(_ATTR),
+            ),
+            days=_days, lines=[],
+            horizons_summary=[
+                _HSum(
+                    horizon_days=h,
+                    forecast_date=_days[h - 1].forecast_date,
+                    baseline=2100.0, contributions={},
+                    events_adjustment=0.0, p10=2010.0, p50=2100.0,
+                    p90=2190.0,
+                )
+                for h in (7, 30, 90)
+            ],
+            missing_drivers=[],
+            accuracy=_Attachment(
+                state=_state, pack_version="2026.10.1",
+                per_horizon=_slices, note="eval fixture",
+            ),
+        )
+        return _forecast.model_copy(
+            update={"forecast_id": _fcid(_forecast)}
+        )
+
+    store.insert_observations(
+        [
+            _Obs(
+                commodity="fixture_grain", market="fixture_market",
+                obs_date=_date(2025, 12, 31), driver="modal_price",
+                value=2000.0,
+            )
+        ]
+    )
+    _rising = _fixture_forecast("measured")
+    store.insert_forecast(_rising)
+    _sig = signal_service.compute_for_forecast(_rising)
+    if not (
+        _sig.drift_pct == 5.0
+        and _sig.band_width_pct == 8.5714
+        and _sig.value == "buy_now"
+        and _verify_signal(store, _sig) == []
+    ):
+        counters["signal_reperformance_errors"] += 1
+    _degraded_fx = _fixture_forecast("degraded")
+    store.insert_forecast(_degraded_fx)
+    _sig = signal_service.compute_for_forecast(_degraded_fx)
+    if not (
+        _sig.base_value == "buy_now"
+        and _sig.value == "phased"
+        and _sig.caps_applied == ["degraded_accuracy"]
+    ):
+        counters["signal_degraded_strong_errors"] += 1
+
+    # The planner: a desk plan on soybean/indore, assessed on the
+    # official forecast and on the adopted scenario's fork.
+    _plan = planning_service.enter_plan(
+        commodity="soybean", market="indore", entered_by="eval.desk",
+        entered_on=_date(2026, 1, 5), opening_stock_tonnes=50.0,
+        lines=[
+            _PlanLine(month=_date(2026, 1, 1), required_tonnes=120.0),
+            _PlanLine(month=_date(2026, 2, 1), required_tonnes=120.0),
+            _PlanLine(month=_date(2026, 3, 1), required_tonnes=120.0),
+        ],
+    )
+    _assessment = planning_service.assess(_plan.plan_id)
+    counters["planning_exposure_errors"] += len(
+        _verify_assessment(store, _assessment)
+    )
+    _expected_order = sorted(
+        _assessment.options,
+        key=lambda o: (o.cost_at_p50_inr, o.cost_at_p90_inr, o.name),
+    )
+    if [o.name for o in _assessment.options] != [
+        o.name for o in _expected_order
+    ] or [o.rank for o in _assessment.options] != [1, 2, 3]:
+        counters["planning_ranking_errors"] += 1
+    for _figure in _assessment.figures:
+        _kinds = [f.kind for f in _figure.lineage]
+        if _figure.basis == "desk" and _kinds != ["desk_entered"]:
+            counters["planning_provenance_errors"] += 1
+        elif _figure.basis == "market" and "desk_entered" in _kinds:
+            counters["planning_provenance_errors"] += 1
+        elif _figure.basis == "mixed" and _kinds.count("desk_entered") != 1:
+            counters["planning_provenance_errors"] += 1
+    try:
+        _scenario_assessment = planning_service.assess(
+            _plan.plan_id, basis="adopted_scenario"
+        )
+        counters["planning_exposure_errors"] += len(
+            _verify_assessment(store, _scenario_assessment)
+        )
+        if _scenario_assessment.scenario_id is None:
+            counters["planning_exposure_errors"] += 1
+    except Exception:
+        counters["planning_exposure_errors"] += 1
+
+    # A tampered exposure figure must be caught.
+    _conn = _sqlite3.connect(str(tmp / "evals.db"))
+    _payload = _json.loads(
+        _conn.execute(
+            "SELECT payload FROM coverage_assessments "
+            "WHERE assessment_id = ?",
+            (_assessment.assessment_id,),
+        ).fetchone()[0]
+    )
+    _payload["total_exposure_inr"] += 1.0
+    _conn.execute(
+        "UPDATE coverage_assessments SET payload = ? "
+        "WHERE assessment_id = ?",
+        (_json.dumps(_payload), _assessment.assessment_id),
+    )
+    _conn.commit()
+    _conn.close()
+    _tampered = store.get_coverage_assessment(_assessment.assessment_id)
+    if not _verify_assessment(store, _tampered):
+        counters["planning_exposure_errors"] += 1
+
+    # Market provenance stays market: a fresh dashboard assembled
+    # after plans exist carries no desk-entered fact anywhere.
+    _spec = dashboard_service.ask(
+        "soybean forecast at indore", "eval.desk", _date(2026, 1, 9)
+    )
+    _assembly = dashboard_service.assemble(_spec.spec_id, _date(2026, 1, 9))
+    _appendix = dashboard_service.appendix(_assembly.assembly_id)
+    for _panel in _appendix["panels"]:
+        for _figure in _panel["figures"]:
+            if any(
+                fact["kind"] == "desk_entered"
+                for fact in _figure["lineage"]
+            ):
+                counters["planning_provenance_errors"] += 1
+
+    # The board, rebuilt now that signals exist: signal rows are
+    # backed by signal artefacts that resolve in the store.
+    _board2 = dashboard_service.board(_date(2026, 2, 15))
+    for _row in _board2.rows:
+        if _row.kind == "signal" and (
+            store.get_buy_signal(_row.artefact_id) is None
+        ):
+            counters["signal_reperformance_errors"] += 1
+
+    print("Round 8 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio + R7 prompt-to-dashboard + R8 buy signals & coverage planning)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]
