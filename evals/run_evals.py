@@ -1780,7 +1780,10 @@ def main() -> int:
     _alerting = _AlertService(store, _alert_pack)
 
     # A planted price step on the fixture series: 2000 flat, then
-    # 2240 from day 21 — exactly one 7-day crossing of +12.0%.
+    # 2240 from day 21 — one 7-day crossing of +12.0% at the step.
+    # The R8 fixture's own spot observation (2000 on 2025-12-31)
+    # then steps the series back down: a second crossing of
+    # -10.7143% at the year end. Both are graded exactly.
     _step_start = _date(2025, 12, 1)
     store.insert_observations(
         [
@@ -1793,13 +1796,14 @@ def main() -> int:
             for i in range(30)
         ]
     )
-    _fixture_crossings = [
-        c for c in _compute_crossings(store, _alert_pack)
-        if c.commodity == "fixture_grain"
-    ]
-    if len(_fixture_crossings) != 1 or (
-        _fixture_crossings[0].move_pct != 12.0
-    ):
+    _fixture_crossings = sorted(
+        (
+            c for c in _compute_crossings(store, _alert_pack)
+            if c.commodity == "fixture_grain"
+        ),
+        key=lambda c: c.to_date,
+    )
+    if [c.move_pct for c in _fixture_crossings] != [12.0, -10.7143]:
         counters["alert_derivation_errors"] += 1
 
     _eval_sub = _alerting.enter_subscription(
@@ -1821,13 +1825,13 @@ def main() -> int:
     ):
         counters["alert_dedup_errors"] += 1
 
-    # The fixture crossing raised exactly one alert.
+    # Each fixture crossing raised exactly one alert.
     _fixture_move_alerts = [
         a for a in _alerting.list_alerts(commodity="fixture_grain")
         if a.kind == "price_move"
     ]
-    if len(_fixture_move_alerts) != 1 or (
-        _fixture_move_alerts[0].severity != "critical"
+    if len(_fixture_move_alerts) != 2 or any(
+        a.severity != "critical" for a in _fixture_move_alerts
     ):
         counters["alert_derivation_errors"] += 1
 
