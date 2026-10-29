@@ -31,6 +31,8 @@ def signal_lineage(store: Store, signal: BuySignal) -> list[LineageFact]:
                 f"{signal.accuracy_state}, under signal pack "
                 f"{signal.pack_version}"
             ),
+            source=f"signal engine, pack {signal.pack_version}",
+            fact_date=signal.as_of,
         )
     ]
     forecast = store.get_forecast(signal.forecast_id)

@@ -355,6 +355,13 @@ class DashboardService:
         # Row kinds outside the pack's section list (R8 signal
         # rows, appended by their own pack) surface under their
         # own section key rather than being dropped from the view.
+        # The signal section is always present, like the pack's
+        # own sections — empty when no signal row stands.
+        sections["signal"] = [
+            row.model_dump(mode="json")
+            for row in board.rows
+            if row.kind == "signal"
+        ]
         for row in board.rows:
             if row.kind not in sections:
                 sections[row.kind] = [

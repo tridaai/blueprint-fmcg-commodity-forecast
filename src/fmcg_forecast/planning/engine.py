@@ -326,6 +326,8 @@ def _build_figures(
                     "assessment — the figures below walk through "
                     "the fork, badged scenario-based"
                 ),
+                source="scenario studio (adopted view)",
+                fact_date=price_source.as_of,
             )
         ] + price_walk
     mixed_walk = desk_walk + price_walk

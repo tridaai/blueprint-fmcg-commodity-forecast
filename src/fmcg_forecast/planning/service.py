@@ -87,10 +87,11 @@ class PlanningService:
                 f"unknown commodity {commodity!r} — the catalogue "
                 "names seven"
             )
-        if market not in spec.markets:
+        market_ids = [m.market for m in spec.markets]
+        if market not in market_ids:
             raise PlanningValidationError(
                 f"{market!r} is not a {commodity} market in the "
-                f"catalogue (one of {', '.join(spec.markets)})"
+                f"catalogue (one of {', '.join(market_ids)})"
             )
         entered_by = _require_named(entered_by, "entered_by")
         if opening_stock_tonnes < 0:
