@@ -33,6 +33,8 @@ from fmcg_forecast.dashboards.pack import DashboardPack
 from fmcg_forecast.events.service import EventService
 from fmcg_forecast.forecast.models import Forecast
 from fmcg_forecast.scenarios.diff import compute_diff
+from fmcg_forecast.thin.engine import compute_assessment
+from fmcg_forecast.thin.pack import load_thin_data_pack
 
 _VIEW_KINDS = {
     "draft": "scenario_draft",
@@ -174,6 +176,19 @@ def resolve_forecast_panel(store, panel: SpecPanel) -> ResolvedPanel:
             "named gaps on the artefact: "
             + ", ".join(head.missing_drivers)
         )
+    # Thin-data depth (R10): the panel states the earned
+    # confidence tier per horizon and every named thin gap —
+    # window evidence, not a padded single number. Computed
+    # from the same store the verifier re-performs against.
+    thin = compute_assessment(store, head, load_thin_data_pack())
+    tiers = ", ".join(
+        f"{h.horizon_days}d {h.tier}" for h in thin.horizons
+    )
+    notes.append(
+        f"thin-data confidence (pack {thin.pack_version}): {tiers}; "
+        "named thin gaps: "
+        + ("; ".join(thin.named_gaps) if thin.named_gaps else "none")
+    )
     return ResolvedPanel(
         panel_no=panel.panel_no,
         kind=panel.kind,

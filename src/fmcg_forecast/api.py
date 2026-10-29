@@ -110,6 +110,12 @@ from fmcg_forecast.sentiment.service import (
     SentimentConflictError,
     SentimentService,
 )
+from fmcg_forecast.intake.service import (
+    IntakeNotFoundError,
+    IntakeService,
+    IntakeStateError,
+    IntakeValidationError,
+)
 from fmcg_forecast.signals.pack import load_signal_pack
 from fmcg_forecast.signals.service import (
     SignalError,
@@ -117,6 +123,9 @@ from fmcg_forecast.signals.service import (
     SignalService,
 )
 from fmcg_forecast.store import SqlStore
+from fmcg_forecast.thin.engine import ThinDataError
+from fmcg_forecast.thin.pack import load_thin_data_pack
+from fmcg_forecast.thin.service import ThinDataNotFoundError, ThinDataService
 
 log = logging.getLogger("fmcg.api")
 
@@ -246,6 +255,35 @@ class DigestRequest(BaseModel):
     digest_date: date
 
 
+class AssessForecastRequest(BaseModel):
+    forecast_id: str
+
+
+class TierClaimRequest(BaseModel):
+    forecast_id: str
+    horizon_days: int
+    claimed_tier: str
+
+
+class EnterIntakeRequest(BaseModel):
+    commodity: str
+    market: str
+    obs_date: date
+    driver: str
+    value: float
+    entered_by: str
+    entered_by_role: str
+    entered_at: datetime | None = None
+    source_note: str
+
+
+class IntakeCheckRequest(BaseModel):
+    checker: str
+    checker_role: str
+    at: datetime | None = None
+    note: str = ""
+
+
 def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     model_port = model or OfflineModel()
     sentiment = SentimentService(store, model_port)
@@ -270,17 +308,22 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     signal_service = SignalService(store)
     planning_service = PlanningService(store, signal_service)
     alert_service = AlertService(store)
+    thin_service = ThinDataService(store)
+    intake_service = IntakeService(store)
     app = FastAPI(
         title="FMCG Commodity Forecast — Operations API",
-        version="0.9.0",
+        version="0.10.0",
         description="Read surfaces for the commodity price & driver store, "
         "the governed forecast surface, the backtest/accuracy surface, "
         "the sentiment surface, the event registry, the scenario "
         "studio, the dashboard assembler with the morning desk "
         "board, the buy-window signals, the coverage & "
-        "exposure planner, and the alerting surface: desk-entered "
+        "exposure planner, the alerting surface: desk-entered "
         "subscriptions, derived alerts, attributed acts and the "
-        "escalation clock.",
+        "escalation clock, the thin-data surface: multi-window "
+        "assessments and per-horizon confidence tiers, and the "
+        "assisted intake surface: phoned-in figures under "
+        "maker–checker.",
     )
 
     @app.middleware("http")
@@ -424,9 +467,19 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     @app.get("/forecasts/{forecast_id}")
     def get_forecast(forecast_id: str) -> dict:
         try:
-            return service.get_forecast(forecast_id).model_dump(mode="json")
+            view = service.get_forecast(forecast_id).model_dump(mode="json")
         except ForecastNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        # The forecast view carries its thin-data assessment
+        # (R10): the earned tier per horizon and every named
+        # gap ride on the read, never as an optional extra a
+        # caller can leave off.
+        try:
+            view["thin_data"] = thin_service.forecast_view(forecast_id)
+        except (ThinDataError, ValueError) as exc:
+            view["thin_data"] = None
+            view["thin_data_problems"] = [str(exc)]
+        return view
 
     @app.get("/forecasts/{forecast_id}/contributions")
     def get_contributions(forecast_id: str) -> dict:
@@ -1239,5 +1292,156 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
             return alert_service.digest_view(digest_id)
         except AlertNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    # -- thin-data assessments (R10, Law 7 depth) ------------------------
+
+    @app.get("/thin-data/pack")
+    def thin_data_pack() -> dict:
+        return load_thin_data_pack().model_dump(mode="json")
+
+    @app.post("/thin-data/assessments", status_code=201)
+    def assess_forecast(body: AssessForecastRequest) -> dict:
+        try:
+            assessment = thin_service.assess_forecast(body.forecast_id)
+        except ForecastNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ThinDataError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return thin_service.assessment_view(assessment.assessment_id)
+
+    @app.get("/thin-data/assessments")
+    def list_thin_assessments(
+        commodity: str | None = Query(None),
+        market: str | None = Query(None),
+    ) -> dict:
+        found = thin_service.list_assessments(commodity, market)
+        return {
+            "assessments": [a.model_dump(mode="json") for a in found]
+        }
+
+    @app.get("/thin-data/assessments/{assessment_id}")
+    def get_thin_assessment(assessment_id: str) -> dict:
+        try:
+            return thin_service.assessment_view(assessment_id)
+        except ThinDataNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/thin-data/assessments/{assessment_id}/verify")
+    def verify_thin_assessment(assessment_id: str) -> dict:
+        try:
+            problems = thin_service.verify_stored(assessment_id)
+        except ThinDataNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"assessment_id": assessment_id, "problems": problems}
+
+    @app.get("/thin-data/forecasts/{forecast_id}")
+    def get_forecast_thin_data(forecast_id: str) -> dict:
+        try:
+            return thin_service.forecast_view(forecast_id)
+        except ForecastNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ThinDataError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/thin-data/claims/verify")
+    def verify_tier_claim(body: TierClaimRequest) -> dict:
+        try:
+            problems = thin_service.verify_claim(
+                body.forecast_id, body.horizon_days, body.claimed_tier
+            )
+        except ForecastNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ThinDataError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {
+            "forecast_id": body.forecast_id,
+            "horizon_days": body.horizon_days,
+            "claimed_tier": body.claimed_tier,
+            "problems": problems,
+        }
+
+    # -- assisted intake, maker–checker (R10, F20-DI3) -------------------
+
+    @app.post("/intake/entries", status_code=201)
+    def enter_intake(body: EnterIntakeRequest) -> dict:
+        try:
+            entry = intake_service.enter(
+                commodity=body.commodity,
+                market=body.market,
+                obs_date=body.obs_date,
+                driver=body.driver,
+                value=body.value,
+                entered_by=body.entered_by,
+                entered_by_role=body.entered_by_role,
+                entered_at=body.entered_at or datetime.now(),
+                source_note=body.source_note,
+            )
+        except IntakeValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return intake_service.entry_view(entry.entry_id)
+
+    @app.get("/intake/entries")
+    def list_intake_entries(
+        commodity: str | None = Query(None),
+        market: str | None = Query(None),
+        state: str | None = Query(None),
+    ) -> dict:
+        found = intake_service.list_entries(commodity, market, state)
+        return {
+            "entries": [
+                intake_service.entry_view(e.entry_id) for e in found
+            ]
+        }
+
+    @app.get("/intake/entries/{entry_id}")
+    def get_intake_entry(entry_id: str) -> dict:
+        try:
+            return intake_service.entry_view(entry_id)
+        except IntakeNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/intake/entries/{entry_id}/confirm")
+    def confirm_intake(entry_id: str, body: IntakeCheckRequest) -> dict:
+        try:
+            act = intake_service.confirm(
+                entry_id,
+                checker=body.checker,
+                checker_role=body.checker_role,
+                acted_at=body.at or datetime.now(),
+                note=body.note,
+            )
+        except IntakeNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except IntakeValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except IntakeStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return act.model_dump(mode="json")
+
+    @app.post("/intake/entries/{entry_id}/reject")
+    def reject_intake(entry_id: str, body: IntakeCheckRequest) -> dict:
+        try:
+            act = intake_service.reject(
+                entry_id,
+                checker=body.checker,
+                checker_role=body.checker_role,
+                acted_at=body.at or datetime.now(),
+                note=body.note,
+            )
+        except IntakeNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except IntakeValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except IntakeStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return act.model_dump(mode="json")
+
+    @app.get("/intake/entries/{entry_id}/verify")
+    def verify_intake_entry(entry_id: str) -> dict:
+        try:
+            problems = intake_service.verify_stored(entry_id)
+        except IntakeNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"entry_id": entry_id, "problems": problems}
 
     return app

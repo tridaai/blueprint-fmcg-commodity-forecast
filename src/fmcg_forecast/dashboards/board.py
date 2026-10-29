@@ -20,6 +20,8 @@ from fmcg_forecast.dashboards.assemble import head_forecast
 from fmcg_forecast.dashboards.models import BoardRow, DeskBoard, board_content_id
 from fmcg_forecast.dashboards.pack import DashboardPack
 from fmcg_forecast.events.service import EventService
+from fmcg_forecast.thin.engine import compute_assessment
+from fmcg_forecast.thin.pack import load_thin_data_pack
 
 
 def _series():
@@ -265,10 +267,21 @@ def build_board(
     )
 
     # -- named data gaps ------------------------------------------------
+    # The row names the head forecast's own gaps and, since R10,
+    # every thin gap the series' assessment names — missing and
+    # stale drivers with their last observed dates — with the
+    # earned confidence tiers on its face.
+    thin_pack = load_thin_data_pack()
     for spec, market, market_display in _series():
         head = head_forecast(store, spec.commodity, market)
-        if head is None or not head.missing_drivers:
+        if head is None:
             continue
+        thin = compute_assessment(store, head, thin_pack)
+        if not head.missing_drivers and not thin.named_gaps:
+            continue
+        tiers = ", ".join(
+            f"{h.horizon_days}d {h.tier}" for h in thin.horizons
+        )
         rows.append(
             BoardRow(
                 kind="data_gap",
@@ -278,12 +291,20 @@ def build_board(
                     f"{spec.display} at {market_display}: named "
                     "gaps on the head forecast — "
                     + ", ".join(head.missing_drivers)
-                    + " (wide bands and named gaps, never fake "
+                    + "; thin-data gaps: "
+                    + ("; ".join(thin.named_gaps) if thin.named_gaps else "none")
+                    + f"; confidence tiers {tiers} "
+                    f"(thin-data pack {thin.pack_version}) "
+                    "(wide bands and named gaps, never fake "
                     "precision)"
                 ),
                 artefact_id=head.forecast_id,
                 artefact_ids=[head.forecast_id],
-                figures={"missing_drivers": ", ".join(head.missing_drivers)},
+                figures={
+                    "missing_drivers": ", ".join(head.missing_drivers),
+                    "thin_named_gaps": "; ".join(thin.named_gaps),
+                    "confidence_tiers": tiers,
+                },
             )
         )
 
