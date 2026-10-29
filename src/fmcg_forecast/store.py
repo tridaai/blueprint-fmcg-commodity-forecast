@@ -31,11 +31,13 @@ from fmcg_forecast.forecast.models import (
 )
 from fmcg_forecast.migrations import apply_migrations
 from fmcg_forecast.models import EventRecord, Manifest, Observation
+from fmcg_forecast.planning.models import CoverageAssessment, RequirementPlan
 from fmcg_forecast.scenarios.models import (
     ScenarioAdoption,
     ScenarioRequest,
     ScenarioRun,
 )
+from fmcg_forecast.signals.models import BuySignal
 from fmcg_forecast.sentiment.models import (
     SentimentCorpusManifest,
     SentimentExtraction,
@@ -149,6 +151,24 @@ class Store(Protocol):
     def insert_desk_board(self, board: DeskBoard) -> None: ...
     def get_desk_board(self, board_id: str) -> DeskBoard | None: ...
     def list_desk_boards(self) -> list[DeskBoard]: ...
+    # -- buy signals + coverage planning (R8) -------------------------
+    def insert_buy_signal(self, signal: BuySignal) -> None: ...
+    def get_buy_signal(self, signal_id: str) -> BuySignal | None: ...
+    def list_buy_signals(
+        self, commodity: str | None = None, market: str | None = None
+    ) -> list[BuySignal]: ...
+    def insert_requirement_plan(self, plan: RequirementPlan) -> None: ...
+    def get_requirement_plan(self, plan_id: str) -> RequirementPlan | None: ...
+    def list_requirement_plans(
+        self, commodity: str | None = None, market: str | None = None
+    ) -> list[RequirementPlan]: ...
+    def insert_coverage_assessment(self, assessment: CoverageAssessment) -> None: ...
+    def get_coverage_assessment(
+        self, assessment_id: str
+    ) -> CoverageAssessment | None: ...
+    def list_coverage_assessments(
+        self, plan_id: str | None = None
+    ) -> list[CoverageAssessment]: ...
     def close(self) -> None: ...
 
 
@@ -1070,6 +1090,147 @@ class SqlStore:
             "SELECT payload FROM desk_boards ORDER BY board_date, board_id"
         )
         return [DeskBoard.model_validate(json.loads(r[0])) for r in cur.fetchall()]
+
+    # -- buy signals + coverage planning (R8) --------------------------
+    # Signals, plans and assessments are insert-only, like every
+    # other artefact: the services check the content address before
+    # inserting, so a re-computation or re-entry that lands on the
+    # same content is a no-op rather than a duplicate-write error.
+
+    def insert_buy_signal(self, signal: BuySignal) -> None:
+        sql = self._q(
+            "INSERT INTO buy_signals (signal_id, commodity, market, "
+            "forecast_id, payload) VALUES (?, ?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                signal.signal_id,
+                signal.commodity,
+                signal.market,
+                signal.forecast_id,
+                signal.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_buy_signal(self, signal_id: str) -> BuySignal | None:
+        cur = self._conn.execute(
+            self._q("SELECT payload FROM buy_signals WHERE signal_id = ?"),
+            (signal_id,),
+        )
+        row = cur.fetchone()
+        return BuySignal.model_validate(json.loads(row[0])) if row else None
+
+    def list_buy_signals(
+        self, commodity: str | None = None, market: str | None = None
+    ) -> list[BuySignal]:
+        sql = "SELECT payload FROM buy_signals"
+        clauses, params = [], []
+        if commodity is not None:
+            clauses.append("commodity = ?")
+            params.append(commodity)
+        if market is not None:
+            clauses.append("market = ?")
+            params.append(market)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY commodity, market, signal_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [BuySignal.model_validate(json.loads(r[0])) for r in cur.fetchall()]
+
+    def insert_requirement_plan(self, plan: RequirementPlan) -> None:
+        sql = self._q(
+            "INSERT INTO requirement_plans (plan_id, commodity, market, "
+            "entered_by, payload) VALUES (?, ?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                plan.plan_id,
+                plan.commodity,
+                plan.market,
+                plan.entered_by,
+                plan.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_requirement_plan(self, plan_id: str) -> RequirementPlan | None:
+        cur = self._conn.execute(
+            self._q("SELECT payload FROM requirement_plans WHERE plan_id = ?"),
+            (plan_id,),
+        )
+        row = cur.fetchone()
+        return RequirementPlan.model_validate(json.loads(row[0])) if row else None
+
+    def list_requirement_plans(
+        self, commodity: str | None = None, market: str | None = None
+    ) -> list[RequirementPlan]:
+        sql = "SELECT payload FROM requirement_plans"
+        clauses, params = [], []
+        if commodity is not None:
+            clauses.append("commodity = ?")
+            params.append(commodity)
+        if market is not None:
+            clauses.append("market = ?")
+            params.append(market)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY commodity, market, plan_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            RequirementPlan.model_validate(json.loads(r[0])) for r in cur.fetchall()
+        ]
+
+    def insert_coverage_assessment(self, assessment: CoverageAssessment) -> None:
+        sql = self._q(
+            "INSERT INTO coverage_assessments (assessment_id, plan_id, "
+            "forecast_id, payload) VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                assessment.assessment_id,
+                assessment.plan_id,
+                assessment.forecast_id,
+                assessment.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_coverage_assessment(
+        self, assessment_id: str
+    ) -> CoverageAssessment | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM coverage_assessments "
+                "WHERE assessment_id = ?"
+            ),
+            (assessment_id,),
+        )
+        row = cur.fetchone()
+        return (
+            CoverageAssessment.model_validate(json.loads(row[0])) if row else None
+        )
+
+    def list_coverage_assessments(
+        self, plan_id: str | None = None
+    ) -> list[CoverageAssessment]:
+        sql = "SELECT payload FROM coverage_assessments"
+        params: list = []
+        if plan_id is not None:
+            sql += " WHERE plan_id = ?"
+            params.append(plan_id)
+        sql += " ORDER BY plan_id, assessment_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            CoverageAssessment.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
 
     def close(self) -> None:
         self._conn.close()
