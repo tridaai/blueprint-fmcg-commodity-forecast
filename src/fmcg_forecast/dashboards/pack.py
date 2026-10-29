@@ -39,6 +39,10 @@ TERMINAL_FACT_KINDS: tuple[str, ...] = (
     "sentiment_item",
     "event_declaration",
     "manifest",
+    # R8: a desk-entered requirement plan is a terminal fact of
+    # its own class — the desk's stated need, never a market
+    # fact. Walks that rest on it terminate here, labelled.
+    "desk_entered",
 )
 
 

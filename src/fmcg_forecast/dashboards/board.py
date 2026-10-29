@@ -248,6 +248,72 @@ def build_board(
             )
         )
 
+    # -- buy-window signals (R8) ------------------------------------
+    # Appended after the pack's sections: the signal pack is its
+    # own versioned pack, so its rows do not join the dashboard
+    # pack's stated section list — the renderer and the board
+    # view surface them under their own heading. A row exists
+    # only where a signal has actually been computed for the
+    # series' head forecast, and only when the call asks for
+    # action (buy_now or phased — a wait is the absence of an
+    # exception). Ranked: strong buys first, then by the size
+    # of the move the call rests on.
+    signal_rows: list[BoardRow] = []
+    for spec, market, market_display in _series():
+        head = head_forecast(store, spec.commodity, market)
+        if head is None:
+            continue
+        signal = next(
+            (
+                s
+                for s in store.list_buy_signals(spec.commodity, market)
+                if s.forecast_id == head.forecast_id
+            ),
+            None,
+        )
+        if signal is None or signal.value == "wait":
+            continue
+        headline = (
+            f"{signal.value} — {spec.display} at {market_display}: "
+            f"{signal.horizon_days}-day drift "
+            f"{signal.drift_pct:+.2f}% against spot, accuracy "
+            f"{signal.accuracy_state}, under signal pack "
+            f"{signal.pack_version}"
+        )
+        if signal.caps_applied:
+            headline += f"; capped: {', '.join(signal.caps_applied)}"
+        if signal.active_events:
+            headline += (
+                "; in declared event window: "
+                + ", ".join(e.event_id for e in signal.active_events)
+            )
+        signal_rows.append(
+            BoardRow(
+                kind="signal",
+                commodity=spec.commodity,
+                market=market,
+                headline=headline,
+                artefact_id=signal.signal_id,
+                artefact_ids=[signal.signal_id, signal.forecast_id],
+                figures={
+                    "drift_pct": signal.drift_pct,
+                    "band_width_pct": signal.band_width_pct,
+                    "accuracy_state": signal.accuracy_state,
+                    "signal": signal.value,
+                },
+            )
+        )
+    rows.extend(
+        sorted(
+            signal_rows,
+            key=lambda r: (
+                0 if r.figures.get("signal") == "buy_now" else 1,
+                -abs(float(r.figures["drift_pct"])),
+                r.artefact_id,
+            ),
+        )
+    )
+
     board = DeskBoard(
         board_id="BOARD-pending",
         board_date=board_date,

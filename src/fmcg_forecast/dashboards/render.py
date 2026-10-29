@@ -303,6 +303,33 @@ def render_board(board: DeskBoard, pack: DashboardPack) -> str:
                 f'<td class="mono">{_esc(row.artefact_id)}</td></tr>'
             )
         out.append("</tbody></table></section>")
+    # Row kinds outside the pack's section list (R8 signal rows,
+    # appended under their own pack) render after the pack's
+    # sections under their own titles — never dropped, never
+    # folded into a pack section they do not belong to.
+    extra_titles = {"signal": "Buy-window signals — ranked for the desk"}
+    rendered = set(pack.board_sections)
+    for row in board.rows:
+        if row.kind in rendered:
+            continue
+        rendered.add(row.kind)
+        rows = [r for r in board.rows if r.kind == row.kind]
+        out.append('<section class="panel">')
+        out.append(
+            f"<h2>{_esc(extra_titles.get(row.kind, row.kind))}</h2>"
+        )
+        out.append("<table><tbody>")
+        for extra_row in rows:
+            figures = "; ".join(
+                f"{key}: {_fmt(value)}"
+                for key, value in sorted(extra_row.figures.items())
+            )
+            figures_part = f' <span class="muted">{_esc(figures)}</span>' if figures else ""
+            out.append(
+                f"<tr><td>{_esc(extra_row.headline)}{figures_part}</td>"
+                f'<td class="mono">{_esc(extra_row.artefact_id)}</td></tr>'
+            )
+        out.append("</tbody></table></section>")
     out.append("</main>")
     out.extend(_footer())
     out += ["</body>", "</html>"]

@@ -84,6 +84,27 @@ def _fact_problems(store, figure: DashboardFigure, fact: LineageFact) -> list[st
             return [
                 f"{where}: lineage names scenario {fact.ref}, not on record"
             ]
+    elif fact.kind == "buy_signal":
+        if store.get_buy_signal(fact.ref) is None:
+            return [
+                f"{where}: lineage names buy signal {fact.ref}, not on record"
+            ]
+    elif fact.kind == "desk_entered":
+        plan = store.get_requirement_plan(fact.ref)
+        if plan is None:
+            return [
+                f"{where}: lineage names requirement plan {fact.ref}, "
+                "not on record"
+            ]
+        if (
+            fact.source != f"desk-entered by {plan.entered_by}"
+            or fact.fact_date != plan.entered_on
+        ):
+            return [
+                f"{where}: lineage states plan {fact.ref} desk-entered "
+                f"by {fact.source!r} on {fact.fact_date}; the stored "
+                f"plan is by {plan.entered_by!r} on {plan.entered_on}"
+            ]
     elif fact.kind == "observation_series":
         parts = fact.ref.split("/")
         if len(parts) != 3:

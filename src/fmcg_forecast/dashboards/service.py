@@ -352,6 +352,16 @@ class DashboardService:
                 for row in board.rows
                 if row.kind == section
             ]
+        # Row kinds outside the pack's section list (R8 signal
+        # rows, appended by their own pack) surface under their
+        # own section key rather than being dropped from the view.
+        for row in board.rows:
+            if row.kind not in sections:
+                sections[row.kind] = [
+                    r.model_dump(mode="json")
+                    for r in board.rows
+                    if r.kind == row.kind
+                ]
         return {
             "board": board.model_dump(mode="json"),
             "sections": sections,

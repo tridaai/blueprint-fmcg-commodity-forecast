@@ -41,10 +41,12 @@ FactKind = Literal[
     "accuracy_record",
     "sentiment_index",
     "scenario_run",
+    "buy_signal",
     "observation_series",
     "sentiment_item",
     "event_declaration",
     "manifest",
+    "desk_entered",
 ]
 
 
@@ -265,7 +267,12 @@ class BoardRow(BaseModel):
     """One exception row of the morning desk board."""
 
     kind: Literal[
-        "degraded", "pending_gate", "active_event", "forecast_change", "data_gap"
+        "degraded", "pending_gate", "active_event", "forecast_change", "data_gap",
+        # R8: a buy-window signal row. The signal pack is a
+        # separate versioned pack, so signal rows append after
+        # the dashboard pack's sections rather than joining its
+        # stated section list.
+        "signal",
     ]
     commodity: str | None = None
     market: str | None = None
