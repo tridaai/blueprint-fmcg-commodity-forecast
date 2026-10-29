@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from fmcg_forecast.catalogue import COMMODITIES
+from fmcg_forecast.catalogue import BY_NAME, COMMODITIES
 from fmcg_forecast.dashboards.assemble import head_forecast
 from fmcg_forecast.dashboards.models import BoardRow, DeskBoard, board_content_id
 from fmcg_forecast.dashboards.pack import DashboardPack
@@ -26,6 +26,21 @@ def _series():
     for spec in COMMODITIES:
         for market in spec.markets:
             yield spec, market.market, market.display
+
+
+def _display_for(commodity: str) -> tuple[str, bool]:
+    """The catalogue's display name for a commodity, and whether
+    the catalogue names it at all. The store holds series the
+    catalogue does not — the signal engine's hand-computed
+    fixture series is one, and the store takes any series key by
+    design — while the sections below read the whole record. An
+    artefact from such a series is named as recorded and badged
+    not_in_catalogue: never a crash, and never a silent drop
+    from the exception inbox."""
+    spec = BY_NAME.get(commodity)
+    if spec is None:
+        return commodity, False
+    return spec.display, True
 
 
 def build_board(
@@ -74,43 +89,59 @@ def build_board(
     for forecast in store.list_forecasts():
         if forecast.status != "draft":
             continue
-        spec = next(c for c in COMMODITIES if c.commodity == forecast.commodity)
+        display, in_catalogue = _display_for(forecast.commodity)
+        figures = {"accuracy_state": (
+            forecast.accuracy.state if forecast.accuracy else "unmeasured"
+        )}
+        headline = (
+            f"forecast {forecast.forecast_id} for "
+            f"{display} at {forecast.market} (as of "
+            f"{forecast.as_of.isoformat()}) awaits the "
+            "approval act"
+        )
+        if not in_catalogue:
+            figures["catalogue"] = "not_in_catalogue"
+            headline += (
+                " — a series outside the desk catalogue, "
+                "named as recorded"
+            )
         pending.append(
             BoardRow(
                 kind="pending_gate",
                 commodity=forecast.commodity,
                 market=forecast.market,
-                headline=(
-                    f"forecast {forecast.forecast_id} for "
-                    f"{spec.display} at {forecast.market} (as of "
-                    f"{forecast.as_of.isoformat()}) awaits the "
-                    "approval act"
-                ),
+                headline=headline,
                 artefact_id=forecast.forecast_id,
                 artefact_ids=[forecast.forecast_id],
-                figures={"accuracy_state": (
-                    forecast.accuracy.state if forecast.accuracy else "unmeasured"
-                )},
+                figures=figures,
             )
         )
     for run in store.list_scenarios():
         if run.status != "draft":
             continue
-        spec = next(c for c in COMMODITIES if c.commodity == run.commodity)
+        display, in_catalogue = _display_for(run.commodity)
+        figures = {"author": run.author}
+        headline = (
+            f"scenario {run.scenario_id} for {display} "
+            f"at {run.market} (a pinned fork of "
+            f"{run.base_forecast_id}) awaits the adoption "
+            "gate"
+        )
+        if not in_catalogue:
+            figures["catalogue"] = "not_in_catalogue"
+            headline += (
+                " — a series outside the desk catalogue, "
+                "named as recorded"
+            )
         pending.append(
             BoardRow(
                 kind="pending_gate",
                 commodity=run.commodity,
                 market=run.market,
-                headline=(
-                    f"scenario {run.scenario_id} for {spec.display} "
-                    f"at {run.market} (a pinned fork of "
-                    f"{run.base_forecast_id}) awaits the adoption "
-                    "gate"
-                ),
+                headline=headline,
                 artefact_id=run.scenario_id,
                 artefact_ids=[run.scenario_id, run.base_forecast_id],
-                figures={"author": run.author},
+                figures=figures,
             )
         )
     rows.extend(sorted(pending, key=lambda r: r.artefact_id))
@@ -136,12 +167,14 @@ def build_board(
         if not (in_window or in_tail):
             continue
         verdict = events.verify_event(event.event_id)
-        spec = next(c for c in COMMODITIES if c.commodity == event.commodity)
+        display, in_catalogue = _display_for(event.commodity)
         phase = "in its window" if in_window else "in its decay tail"
         figures = {
             "claimed_peak_log": event.transmission.peak_log_price_effect,
             "verification_status": verdict.status,
         }
+        if not in_catalogue:
+            figures["catalogue"] = "not_in_catalogue"
         if verdict.measured_ratio is not None:
             figures["measured_ratio"] = verdict.measured_ratio
         active.append(
@@ -150,13 +183,19 @@ def build_board(
                 commodity=event.commodity,
                 market=None,
                 headline=(
-                    f"{event.event_class} for {spec.display}: "
+                    f"{event.event_class} for {display}: "
                     f"window {event.window_start.isoformat()}.."
                     f"{window_end.isoformat() if window_end else 'open'} "
                     f"is {phase} today — claimed peak "
                     f"{event.transmission.peak_log_price_effect:+.3f} "
                     f"log via {event.transmission.channel}, "
                     f"transmission {verdict.status}"
+                    + (
+                        " — a series outside the desk catalogue, "
+                        "named as recorded"
+                        if not in_catalogue
+                        else ""
+                    )
                 ),
                 artefact_id=event.event_id,
                 artefact_ids=[event.event_id],
