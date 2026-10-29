@@ -21,6 +21,13 @@ from fmcg_forecast.dashboards.models import (
     DashboardView,
     DeskBoard,
 )
+from fmcg_forecast.alerts.models import (
+    AlertAct,
+    AlertDigest,
+    AlertInstance,
+    AlertSubscription,
+    PriceCrossing,
+)
 from fmcg_forecast.events.models import MarketEvent
 from fmcg_forecast.forecast.models import (
     AccuracyRecord,
@@ -169,6 +176,37 @@ class Store(Protocol):
     def list_coverage_assessments(
         self, plan_id: str | None = None
     ) -> list[CoverageAssessment]: ...
+    # -- alerting, subscriptions and escalation (R9) -------------------
+    def insert_alert_subscription(self, subscription: AlertSubscription) -> None: ...
+    def get_alert_subscription(
+        self, subscription_id: str
+    ) -> AlertSubscription | None: ...
+    def list_alert_subscriptions(
+        self, subscriber: str | None = None
+    ) -> list[AlertSubscription]: ...
+    def insert_price_crossing(self, crossing: PriceCrossing) -> None: ...
+    def get_price_crossing(self, crossing_id: str) -> PriceCrossing | None: ...
+    def list_price_crossings(
+        self, commodity: str | None = None, market: str | None = None
+    ) -> list[PriceCrossing]: ...
+    def insert_alert(self, alert: AlertInstance) -> None: ...
+    def get_alert(self, alert_id: str) -> AlertInstance | None: ...
+    def list_alerts(
+        self,
+        commodity: str | None = None,
+        market: str | None = None,
+        subscription_id: str | None = None,
+    ) -> list[AlertInstance]: ...
+    def insert_alert_act(self, act: AlertAct) -> None: ...
+    def get_alert_act(self, act_id: str) -> AlertAct | None: ...
+    def list_alert_acts(
+        self, alert_id: str | None = None
+    ) -> list[AlertAct]: ...
+    def insert_alert_digest(self, digest: AlertDigest) -> None: ...
+    def get_alert_digest(self, digest_id: str) -> AlertDigest | None: ...
+    def list_alert_digests(
+        self, subscription_id: str | None = None
+    ) -> list[AlertDigest]: ...
     def close(self) -> None: ...
 
 
@@ -1229,6 +1267,232 @@ class SqlStore:
         cur = self._conn.execute(self._q(sql), params)
         return [
             CoverageAssessment.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    # -- alerting, subscriptions and escalation (R9) -------------------
+    # Subscriptions, crossings, alerts, acts and digests are
+    # insert-only, like every other artefact: the services check
+    # the content address before inserting, so a re-derivation or
+    # re-entry that lands on the same content is a no-op rather
+    # than a duplicate-write error.
+
+    def insert_alert_subscription(self, subscription: AlertSubscription) -> None:
+        sql = self._q(
+            "INSERT INTO alert_subscriptions (subscription_id, "
+            "subscriber, payload) VALUES (?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                subscription.subscription_id,
+                subscription.subscriber,
+                subscription.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_alert_subscription(
+        self, subscription_id: str
+    ) -> AlertSubscription | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM alert_subscriptions "
+                "WHERE subscription_id = ?"
+            ),
+            (subscription_id,),
+        )
+        row = cur.fetchone()
+        return (
+            AlertSubscription.model_validate(json.loads(row[0]))
+            if row
+            else None
+        )
+
+    def list_alert_subscriptions(
+        self, subscriber: str | None = None
+    ) -> list[AlertSubscription]:
+        sql = "SELECT payload FROM alert_subscriptions"
+        params: list = []
+        if subscriber is not None:
+            sql += " WHERE subscriber = ?"
+            params.append(subscriber)
+        sql += " ORDER BY subscriber, subscription_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            AlertSubscription.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    def insert_price_crossing(self, crossing: PriceCrossing) -> None:
+        sql = self._q(
+            "INSERT INTO price_crossings (crossing_id, commodity, "
+            "market, payload) VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                crossing.crossing_id,
+                crossing.commodity,
+                crossing.market,
+                crossing.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_price_crossing(self, crossing_id: str) -> PriceCrossing | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM price_crossings WHERE crossing_id = ?"
+            ),
+            (crossing_id,),
+        )
+        row = cur.fetchone()
+        return PriceCrossing.model_validate(json.loads(row[0])) if row else None
+
+    def list_price_crossings(
+        self, commodity: str | None = None, market: str | None = None
+    ) -> list[PriceCrossing]:
+        sql = "SELECT payload FROM price_crossings"
+        clauses, params = [], []
+        if commodity is not None:
+            clauses.append("commodity = ?")
+            params.append(commodity)
+        if market is not None:
+            clauses.append("market = ?")
+            params.append(market)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY commodity, market, crossing_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            PriceCrossing.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    def insert_alert(self, alert: AlertInstance) -> None:
+        sql = self._q(
+            "INSERT INTO alerts (alert_id, subscription_id, commodity, "
+            "market, kind, payload) VALUES (?, ?, ?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                alert.alert_id,
+                alert.subscription_id,
+                alert.commodity,
+                alert.market,
+                alert.kind,
+                alert.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_alert(self, alert_id: str) -> AlertInstance | None:
+        cur = self._conn.execute(
+            self._q("SELECT payload FROM alerts WHERE alert_id = ?"),
+            (alert_id,),
+        )
+        row = cur.fetchone()
+        return AlertInstance.model_validate(json.loads(row[0])) if row else None
+
+    def list_alerts(
+        self,
+        commodity: str | None = None,
+        market: str | None = None,
+        subscription_id: str | None = None,
+    ) -> list[AlertInstance]:
+        sql = "SELECT payload FROM alerts"
+        clauses, params = [], []
+        if commodity is not None:
+            clauses.append("commodity = ?")
+            params.append(commodity)
+        if market is not None:
+            clauses.append("market = ?")
+            params.append(market)
+        if subscription_id is not None:
+            clauses.append("subscription_id = ?")
+            params.append(subscription_id)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY subscription_id, kind, commodity, market, alert_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            AlertInstance.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    def insert_alert_act(self, act: AlertAct) -> None:
+        sql = self._q(
+            "INSERT INTO alert_acts (act_id, alert_id, payload) "
+            "VALUES (?, ?, ?)"
+        )
+        self._conn.execute(
+            sql, (act.act_id, act.alert_id, act.model_dump_json())
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_alert_act(self, act_id: str) -> AlertAct | None:
+        cur = self._conn.execute(
+            self._q("SELECT payload FROM alert_acts WHERE act_id = ?"),
+            (act_id,),
+        )
+        row = cur.fetchone()
+        return AlertAct.model_validate(json.loads(row[0])) if row else None
+
+    def list_alert_acts(self, alert_id: str | None = None) -> list[AlertAct]:
+        sql = "SELECT payload FROM alert_acts"
+        params: list = []
+        if alert_id is not None:
+            sql += " WHERE alert_id = ?"
+            params.append(alert_id)
+        sql += " ORDER BY alert_id, act_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [AlertAct.model_validate(json.loads(r[0])) for r in cur.fetchall()]
+
+    def insert_alert_digest(self, digest: AlertDigest) -> None:
+        sql = self._q(
+            "INSERT INTO alert_digests (digest_id, subscription_id, "
+            "digest_date, payload) VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                digest.digest_id,
+                digest.subscription_id,
+                self._date_param(digest.digest_date),
+                digest.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_alert_digest(self, digest_id: str) -> AlertDigest | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM alert_digests WHERE digest_id = ?"
+            ),
+            (digest_id,),
+        )
+        row = cur.fetchone()
+        return AlertDigest.model_validate(json.loads(row[0])) if row else None
+
+    def list_alert_digests(
+        self, subscription_id: str | None = None
+    ) -> list[AlertDigest]:
+        sql = "SELECT payload FROM alert_digests"
+        params: list = []
+        if subscription_id is not None:
+            sql += " WHERE subscription_id = ?"
+            params.append(subscription_id)
+        sql += " ORDER BY subscription_id, digest_date, digest_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            AlertDigest.model_validate(json.loads(r[0]))
             for r in cur.fetchall()
         ]
 
