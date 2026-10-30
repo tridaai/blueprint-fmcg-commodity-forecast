@@ -45,6 +45,12 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
+from fmcg_forecast.analytics.engine import AnalyticsError
+from fmcg_forecast.analytics.pack import load_analytics_pack
+from fmcg_forecast.analytics.service import (
+    AnalyticsNotFoundError,
+    AnalyticsService,
+)
 from fmcg_forecast.alerts.pack import load_alert_pack
 from fmcg_forecast.alerts.service import (
     AlertNotFoundError,
@@ -368,9 +374,10 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     thin_service = ThinDataService(store)
     intake_service = IntakeService(store)
     ingest_service = IngestService(store)
+    analytics_service = AnalyticsService(store)
     app = FastAPI(
         title="FMCG Commodity Forecast — Operations API",
-        version="0.11.0",
+        version="0.12.0",
         description="Read surfaces for the commodity price & driver store, "
         "the governed forecast surface, the backtest/accuracy surface, "
         "the sentiment surface, the event registry, the scenario "
@@ -383,7 +390,11 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
         "assisted intake surface: phoned-in figures under "
         "maker–checker, and the production data plane: the "
         "source registry, connector loads with quarantine and "
-        "provenance, correction overlays, and backfill replay.",
+        "provenance, correction overlays, and backfill replay, "
+        "and the forecast-ops analytics surface: accuracy "
+        "trends, signal outcomes, transmission error by event "
+        "class and shock-window grades, computed from the "
+        "artefacts of record.",
     )
 
     @app.middleware("http")
@@ -1642,5 +1653,43 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     @app.get("/ingest/verify")
     def verify_ingest() -> dict:
         return {"problems": ingest_service.verify_all()}
+
+    # -- forecast-ops analytics (R12, F20-AM1) ---------------------------
+
+    @app.get("/analytics/pack")
+    def analytics_pack() -> dict:
+        return load_analytics_pack().model_dump(mode="json")
+
+    @app.post("/analytics/reports", status_code=201)
+    def build_analytics_report() -> dict:
+        try:
+            report = analytics_service.build_report()
+        except AnalyticsError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return analytics_service.report_view(report.report_id)
+
+    @app.get("/analytics/reports")
+    def list_analytics_reports() -> dict:
+        return {
+            "reports": [
+                r.model_dump(mode="json")
+                for r in analytics_service.list_reports()
+            ]
+        }
+
+    @app.get("/analytics/reports/{report_id}")
+    def get_analytics_report(report_id: str) -> dict:
+        try:
+            return analytics_service.report_view(report_id)
+        except AnalyticsNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/analytics/reports/{report_id}/verify")
+    def verify_analytics_report(report_id: str) -> dict:
+        try:
+            problems = analytics_service.verify_stored(report_id)
+        except AnalyticsNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"report_id": report_id, "problems": problems}
 
     return app
