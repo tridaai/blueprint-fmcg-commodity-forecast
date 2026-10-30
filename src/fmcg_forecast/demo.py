@@ -807,6 +807,57 @@ def main() -> int:
           f"the phone page renders the same record in "
           f"{len(phone)} bytes; the whole console re-performs "
           f"with {len(verify_console(store))} problems")
+
+    print("\n--- geospatial basis & netting (R14, F20-PO4 + F20-GS1 + F20-GS2): where each market stands ---")
+    from fmcg_forecast.geo.render import inr, signed_inr
+    from fmcg_forecast.geo.service import GeoService
+    from fmcg_forecast.geo.verify import verify_geo
+
+    geo = GeoService(store)
+    geo_as_of = date(2025, 12, 31)
+    reading = geo.strike_basis_reading("wheat", geo_as_of)
+    for row in reading.rows:
+        if row.classification == "reference":
+            print(f"  basis, wheat vs {row.display} (the reference): "
+                  f"spread {signed_inr(0)} by construction over "
+                  f"{row.paired_days} paired days")
+        elif row.band_low_paise is not None:
+            print(f"  basis, wheat at {row.display}: current spread "
+                  f"{signed_inr(row.current_spread_paise)} against "
+                  f"its own band {signed_inr(row.band_low_paise)} "
+                  f"to {signed_inr(row.band_high_paise)} — "
+                  f"{row.classification}")
+    for market, freight, handling in (
+        ("delhi_khari_baoli", 30000, 8000),
+        ("indore", 45000, 12000),
+    ):
+        geo.enter_cost_line("wheat", market, "freight", freight,
+                            "a.rao", date(2025, 12, 30))
+        geo.enter_cost_line("wheat", market, "handling", handling,
+                            "a.rao", date(2025, 12, 30))
+    comparison = geo.strike_landed_comparison(
+        "wheat", geo_as_of, "verdanta_plant"
+    )
+    for row in comparison.rows:
+        if row.state == "computable":
+            print(f"  landed, wheat ex-{row.display}: "
+                  f"{inr(row.landed_paise)}/quintal at the desk "
+                  f"(rank {row.rank}) — price plus the desk's own "
+                  "entered freight and handling")
+        else:
+            print(f"  landed, wheat ex-{row.display}: not "
+                  f"computable — the desk has entered no "
+                  f"{' or '.join(row.missing_lines)} line for "
+                  "this market, and no line is ever assumed")
+    wheat_map = geo.strike_map("wheat", geo_as_of)
+    soybean_map = geo.strike_map("soybean", date(2025, 6, 20))
+    print(f"  market map {wheat_map.map_id}: "
+          f"{len(wheat_map.cells)} market cells on the schematic "
+          f"grid, pinning basis reading {reading.reading_id}; "
+          f"the soybean map inside the planted tariff window "
+          f"carries {[e.event_id for e in soybean_map.active_events]} "
+          f"as its active event overlay; the whole geo layer "
+          f"re-performs with {len(verify_geo(store))} problems")
     print(f"sealed truth rows stored: {truth_store.count()} (readable only via the truth store)")
     return 0
 

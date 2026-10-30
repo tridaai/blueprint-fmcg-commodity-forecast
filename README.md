@@ -904,6 +904,96 @@ and removes the event from new runs. The phone page is a
 rendering of the same composed view as the desktop page —
 no second record, no phone-only state.
 
+## What Round 14 adds
+
+Geospatial basis & netting (F20-PO4 + F20-GS1 + F20-GS2
+on the roadmap) — the layer that puts the markets on
+one map and prices them into one plant, under a
+versioned **geo pack** (v2026.10.1: the band window and
+quantiles, the paired-days floor, the freshness rule,
+the cost-line catalogue, the landed ranking rule, the
+weather-overlay rule and the schematic geography — all
+stated as data). Every geo artefact is content-addressed
+and insert-only, the band re-performs from the raw
+series, and a tampered reading, comparison or map is
+flagged, never passed silently.
+
+- **Registry benchmarks and basis bands (F20-PO4)** —
+  the catalogue now names each commodity's reference
+  market (its first-listed market, whose records carry
+  the 1.000 price factor). A **basis reading**
+  (`BASIS-`) compares every reporting market against it
+  over the pack's trailing 365-day band with paise-exact
+  arithmetic: the paired spread band (10th / median /
+  90th percentiles from same-date pairs only — never
+  interpolated, never from unmatched dates), the paired
+  days counted on the face, and a classification:
+  reference, within, wide, narrow. Below the pack's
+  60-paired-day floor the spread is **insufficient
+  history** and the band is still stated; a market that
+  never pairs reads **no paired history**; a spread
+  whose last pair is older than the pack's freshness
+  window is flagged **stale** on its face. It is graded,
+  not asserted: the eval gate re-pairs the raw series
+  itself and re-derives every band edge.
+- **The landed comparison and its cost lines (F20-GS1)**
+  — freight and handling are entered by the desk as
+  **cost-line entries** (`COST-`): a named enterer, an
+  entry date, an integer paise rate, `origin:
+  desk_entered` on every entry. They are the layer's
+  only money inputs — the code assumes nothing, and a
+  line outside the pack's catalogue, a negative or
+  non-integer rate, or an unnamed enterer is refused.
+  The standing rate per line is the fold's latest entry
+  (earlier entries stay on the record), scoped to
+  entries entered on or before the comparison's as-of,
+  so a rate entered later never reprices an earlier
+  comparison. A **landed comparison** (`LAND-`) reads
+  landed = the market's current stored price + its
+  standing lines, ranked cheapest first by the pack's
+  rule. A market missing a line reads **not computable**
+  with the line named and its rate carried as missing —
+  never assumed, never ranked. The scope note rides on
+  the artefact: comparison only — no purchase, transfer
+  or trade is placed or instructed; procurement
+  execution stays out of scope.
+- **The market map (F20-GS2)** — a **market map**
+  (`MAP-`) lays the commodity's markets on the pack's
+  schematic geography — a relative grid read off the
+  catalogue, stated as schematic, never surveyed
+  coordinates — pinning the standing basis reading by
+  id. Each cell composes only artefact reads: the
+  current price, the basis classification and spread
+  from the pinned reading, the weather overlay (the
+  trailing 90-day deviation of the stored weather index
+  the engine itself consumes — no second weather
+  record), and the open-alert state folded at the
+  as-of. Registry events whose windows cover the as-of
+  ride above the grid as the event overlay. A market
+  with no current price renders as a **named gap,
+  never a zero**; the page is stored inside the
+  artefact and must re-render byte-for-byte.
+- **Surfaces** — migration 0014 (both dialects);
+  `GET /geo/pack`, `POST/GET /geo/cost-lines`,
+  `POST/GET /geo/basis-readings` (+ `/{id}`),
+  `POST/GET /geo/landed-comparisons` (+ `/{id}`),
+  `POST/GET /geo/maps` (+ `/{id}`, `/{id}/html`),
+  `GET /geo/verify`; the `fmcg-agent-geo` CLI. The demo
+  strikes a wheat basis, enters desk cost lines, prices
+  a landed comparison with one market left honestly not
+  computable, and opens the soybean map inside the
+  planted tariff window.
+
+Honest positions, stated plainly: the geography is a
+schematic layout for reading, not GIS — positions are
+relative, distances are not computed, and nothing here
+routes freight. The landed comparison is only as
+current as the desk's entries: rates carry the date
+they were entered and the comparison names its as-of;
+nothing refreshes them automatically. Basis is measured
+on modal price only — arrivals-weighted or
+quality-adjusted basis is not claimed.
+
 ## Honest status
 
 - **Built and gated in R1:** the spine, generator + manifest, store port +
@@ -1092,9 +1182,30 @@ no second record, no phone-only state.
   finality, the triage gate in both directions and phone
   action parity; the truth-isolation scan now covers the
   console package too.
-- **Not yet built:** R14 onward on the round map (F20-PO4
-  and F20-GS next). The round map runs to R20 and
-  continues past it until the production bar is met.
+- **Built and gated in R14:** the geo pack (band window
+  and quantiles, paired-days floor, freshness rule,
+  cost-line catalogue, ranking rule, weather-overlay
+  rule, schematic geography — versioned data), basis
+  readings against the catalogue's reference markets
+  with the band re-performed from raw same-date pairs
+  (insufficient and unpaired history named, never
+  interpolated), desk cost lines as the landed layer's
+  only money inputs (catalogue-checked, fold-headed,
+  as-of scoped, desk provenance on every entry), landed
+  comparisons that name their missing lines instead of
+  assuming a rate, market maps whose cells compose
+  artefact reads only and render no-data markets as
+  named gaps, migration 0014, the geo API surface, the
+  `fmcg-agent-geo` CLI and the demo walk. Eval gate v13
+  adds zero-tolerance counters for band re-derivation,
+  cost-line discipline, landed arithmetic and ranking,
+  map-cell composition and the weather/event overlay;
+  the truth-isolation scan now covers the geo package
+  too.
+- **Not yet built:** R15 onward on the round map (the
+  F20-AD2 / F20-CA2 chains and F20-CA1 next). The round
+  map runs to R20 and continues past it until the
+  production bar is met.
 - **The dataset in this repo is generated in-repo for the blueprint** — gold
   by construction, so the engine can be graded against a known future.
 - **Live models are stub-tested until configured:** hosted profiles fail

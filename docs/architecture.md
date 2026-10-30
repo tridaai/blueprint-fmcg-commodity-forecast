@@ -322,6 +322,34 @@ LangGraph state machine whose transitions are stored artefacts:
   artefacts, and the phone's single action door dispatches
   to the same service methods as the canonical endpoints
   — parity is an equality of artefacts, graded.
+- **geospatial basis & netting** (R14, landed): the
+  markets on one map, priced into one plant (F20-PO4 +
+  F20-GS1 + F20-GS2). A versioned geo pack states the
+  band window and quantiles, the paired-days floor, the
+  freshness rule, the cost-line catalogue, the landed
+  ranking rule, the weather-overlay rule and a schematic
+  geography (a relative grid read off the catalogue —
+  stated as schematic, never surveyed coordinates).
+  Basis readings pair same-date modal-price observations
+  against the catalogue's reference market with
+  paise-exact arithmetic — no interpolation, no
+  unmatched dates — and name insufficient or absent
+  pairing instead of grading it. Cost lines are the
+  layer's only money inputs: desk-entered artefacts
+  with provenance, catalogue-checked, folded to a
+  standing head per line and scoped to the comparison's
+  as-of, so a later entry never reprices an earlier
+  comparison. A landed comparison whose market is
+  missing a line reads not computable with the line
+  named — the code assumes no rate, ever. The market
+  map pins its basis reading by id and composes each
+  cell from artefact reads alone — price, pinned basis,
+  the weather deviation of the same stored weather-index
+  facts the engine consumes, the alert fold at the
+  as-of, and the registry's covering events — rendering
+  a market with no current price as a named gap, never
+  a zero, and storing its page so re-rendering must
+  match byte-for-byte.
 
 ## Failure posture
 
