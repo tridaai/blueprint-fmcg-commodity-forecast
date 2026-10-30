@@ -578,6 +578,85 @@ and a frozen `constraints.txt` · multi-stage non-root Docker.
   later), closing on a digest and a whole-set
   re-performance.
 
+## What Round 10 adds
+
+Thin-data depth and assisted intake — Law 7 made operational
+(F20-DI3 on the roadmap). A thin series no longer gets a
+padded single number: it gets evidence, an earned confidence
+tier, and named gaps on every surface; and a number a person
+phones in no longer lands in the data on the enterer's word
+alone — it waits for a second named person.
+
+- **Thin-data assessments as artefacts** — under a versioned
+  **thin-data pack** (windows, staleness bars, the tier bars
+  and caps, the band-width rule: pack v2026.10.1), each
+  forecast's pinned assessment states, for its own series:
+  **operating-day coverage by window** (7/30/90/365 days,
+  on the series' own catalogue reporting pattern — coffee's
+  Tue/Fri pattern counts exactly its own days), with **every
+  missing operating date named by date**; per-driver states
+  — present, missing or stale — with the **last observed
+  date** for every gap; and per-horizon **confidence tiers**
+  (`established` / `guarded` / `thin` / `unproven`) computed
+  in code from the window coverage, the measured accuracy
+  (MAPE and band coverage) and the forecast band's width
+  against the series' own realised volatility. **Caps never
+  raise a tier:** an unreported driver caps at `guarded`, a
+  stale driver or a degraded accuracy record caps at
+  `thin`, a not-estimable sentiment caps at `guarded`. Every
+  failed bar and applied cap is a named reason on the
+  horizon's face. Assessments are insert-only and
+  content-addressed; the verifier re-performs them field for
+  field, and a stored tier above the re-performed tier is an
+  **overstatement** — as is any surface claiming a tier the
+  series has not earned (`POST /thin-data/claims/verify`
+  grades such a claim as a contradiction). The groundnut
+  forecast view, the coffee dashboard note and the board's
+  gap rows all carry the tiers and name every thin gap.
+- **Assisted intake with maker–checker (F20-DI3)** — a
+  phoned-in price or arrivals figure is entered as a
+  **pending entry** naming its enterer and source note. A
+  pending entry is **not a fact**: it lives in its own table
+  and no engine read can see it. A second named person —
+  never the enterer; the self-check is refused in code,
+  case-insensitively — confirms or rejects it in an
+  attributed act. Confirmation inserts exactly one
+  observation through the store's ordinary insert path, and
+  the entry's provenance carries both names; rejection lands
+  nothing. One natural key (series, date, driver) carries at
+  most one entry and at most one fact, so a phoned-in figure
+  can never duplicate or overwrite a reported one. The
+  verifier re-performs the whole chain: content addresses,
+  the no-self-check rule, and the grading that a pending or
+  rejected entry with an observation at its key is
+  **unconfirmed leakage**.
+- **Surfaces** — migration 0010 (both dialects); `GET
+  /thin-data/pack`, `POST /thin-data/assessments`, `GET
+  /thin-data/assessments` + `/{id}` + `/{id}/verify`, `GET
+  /thin-data/forecasts/{forecast_id}`, `POST
+  /thin-data/claims/verify`; `POST /intake/entries`, `GET
+  /intake/entries` + `/{id}`, `POST /intake/entries/{id}/
+  confirm` + `/reject`, `GET /intake/entries/{id}/verify`;
+  the `fmcg-agent-thin` and `fmcg-agent-intake` CLIs. The
+  forecast view (`GET /forecasts/{id}`) now carries the
+  assessment beside the forecast. The demo walks groundnut
+  and coffee's thin evidence (coffee's 365-day window naming
+  the planted August 2025 disruption days by date), refuses
+  an unearned `established` claim, and runs one phoned-in
+  coffee price through pending → self-check refused →
+  confirmed by a second person into exactly one fact.
+
+Honest positions, stated plainly: a tier is an **evidence
+judgement under the stated pack**, not an accuracy claim —
+the accuracy itself still rides on the R3 ledger's measured
+records, and a tier never changes a forecast number. Intake
+covers the two phone-reportable drivers (`modal_price`,
+`arrivals`); the intake provenance rides the confirmation
+lineage the entry view exposes — the observation schema is
+unchanged, so an assisted fact is indistinguishable in the
+series itself from a reported one once confirmed, which is
+the point of the checker gate.
+
 ## Honest status
 
 - **Built and gated in R1:** the spine, generator + manifest, store port +
@@ -682,6 +761,23 @@ and a frozen `constraints.txt` · multi-stage non-root Docker.
   escalation fold, daily digests, the whole-set re-performance
   verifier, migration 0009, the alerts API surface and the
   `fmcg-agent-alerts` CLI, demo walk.
+- **Built and gated in R10:** the thin-data pack (windows,
+  staleness bars, tier bars and caps, the band-width rule),
+  the assessment engine (operating-day coverage with named
+  missing dates, driver states with last-observed dates,
+  per-horizon tiers computed in code), the claim verifier
+  (an unearned tier stated anywhere is a graded
+  contradiction), assisted intake with maker–checker
+  (pending entries invisible to engines, the self-check
+  refused in code, confirmation landing exactly one fact
+  with both names in its lineage), the chain verifier,
+  migration 0010, the thin-data and intake API surfaces and
+  the `fmcg-agent-thin` / `fmcg-agent-intake` CLIs, demo
+  walk. Eval gate v9 adds zero-tolerance counters for tier
+  overstatement, window-coverage recomputation, unnamed
+  thin gaps, unconfirmed intake leakage, self-checks and
+  intake chain breaks; the truth-isolation scan now covers
+  the thin and intake packages too.
   Eval gate v8 adds zero-tolerance counters for degraded-series
   strong signals, signal re-performance, exposure arithmetic,
   desk/market provenance mixing and off-criteria ranking; the
@@ -806,7 +902,21 @@ src/fmcg_forecast/
     verify.py      per-alert + whole-set re-performance
     service.py     subscribe / sweep / act / digest — one workflow
     cli.py         the fmcg-agent-alerts command line
-migrations/        0001-0009 SQL, sqlite + postgres dialects
+  thin/            the thin-data package (truth-isolated, R10):
+    pack.py        the thin-data pack: windows, staleness
+                   bars, tier bars + caps, band-width rule
+    models.py      window coverage / driver state / horizon
+                   confidence / assessment artefacts
+    engine.py      windows, driver states, tiers — in code
+    verify.py      re-performance + tier-claim grading
+    service.py     assess / read / verify — one workflow
+    cli.py         the fmcg-agent-thin command line
+  intake/          the assisted-intake package (truth-isolated, R10):
+    models.py      pending entry / check act artefacts
+    service.py     enter / confirm / reject — maker–checker
+    verify.py      chain re-performance + leakage grading
+    cli.py         the fmcg-agent-intake command line
+migrations/        0001-0010 SQL, sqlite + postgres dialects
 scripts/           demo.py, local_harness.py
 evals/             the eval gate
 docs/              architecture.md

@@ -223,6 +223,24 @@ LangGraph state machine whose transitions are stored artefacts:
   date, and the verifier re-performs the whole set against
   a fresh derivation. Alerts stay out of the dashboard
   panel catalogue for the same reason signals did.
+- **thin data & intake** (R10, landed): thin-data depth and
+  assisted intake (Law 7 depth, F20-DI3). A versioned
+  thin-data pack judges each forecast's own series —
+  operating-day coverage by window on the catalogue
+  reporting pattern with every missing date named,
+  per-driver states with last-observed dates, per-horizon
+  confidence tiers computed in code from coverage, measured
+  accuracy and band width against the series' own realised
+  volatility; caps only ever lower a tier, and a tier
+  stated anywhere above the earned one is a graded
+  contradiction. Assisted intake keeps desk-entered
+  figures in pending tables no engine read can see; a
+  named checker who is not the enterer confirms (landing
+  exactly one observation through the store's insert path,
+  both names riding the entry's lineage) or rejects
+  (landing nothing); the chain re-performs, and an
+  observation standing at a pending or rejected entry's
+  key is graded leakage.
 
 ## Failure posture
 
