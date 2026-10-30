@@ -67,6 +67,13 @@ from fmcg_forecast.console.engine import (
     ConsoleValidationError,
 )
 from fmcg_forecast.console.pack import load_console_pack
+from fmcg_forecast.geo.engine import GeoError
+from fmcg_forecast.geo.pack import load_geo_pack
+from fmcg_forecast.geo.service import (
+    GeoNotFoundError,
+    GeoService,
+    GeoValidationError,
+)
 from fmcg_forecast.console.render import render_console, render_console_phone
 from fmcg_forecast.console.service import ConsoleService
 from fmcg_forecast.dashboards.pack import load_dashboard_pack
@@ -370,6 +377,32 @@ class StrikePreflightRequest(BaseModel):
     as_of: date | None = None
 
 
+class EnterCostLineRequest(BaseModel):
+    commodity: str
+    market: str
+    line: str
+    rate_paise_per_quintal: int
+    entered_by: str
+    entered_on: date
+    note: str = ""
+
+
+class StrikeBasisRequest(BaseModel):
+    commodity: str
+    as_of: date
+
+
+class StrikeLandedRequest(BaseModel):
+    commodity: str
+    as_of: date
+    priced_for: str
+
+
+class StrikeMapRequest(BaseModel):
+    commodity: str
+    as_of: date
+
+
 class TriageActRequest(BaseModel):
     actor: str
     role: str
@@ -433,9 +466,10 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     intake_service = IntakeService(store)
     ingest_service = IngestService(store)
     analytics_service = AnalyticsService(store)
+    geo_service = GeoService(store)
     app = FastAPI(
         title="FMCG Commodity Forecast — Operations API",
-        version="0.13.0",
+        version="0.14.0",
         description="Read surfaces for the commodity price & driver store, "
         "the governed forecast surface, the backtest/accuracy surface, "
         "the sentiment surface, the event registry, the scenario "
@@ -457,7 +491,13 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
         "triage queue gating the official view, coverage "
         "pre-flights a run can pin, and the desktop and "
         "phone-first console pages whose actions strike the "
-        "same acts.",
+        "same acts, and the geospatial basis & netting "
+        "surface: desk-entered freight and handling lines, "
+        "basis readings against each market's own history "
+        "band, landed-cost comparisons that name a missing "
+        "line instead of assuming it, and the schematic "
+        "market map with its alert state and weather/event "
+        "overlay.",
     )
 
     @app.middleware("http")
@@ -1988,5 +2028,126 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     @app.get("/console/verify")
     def verify_console_endpoint() -> dict:
         return {"problems": console_service.verify_stored()}
+
+    # -- geospatial basis & netting (R14: F20-PO4, F20-GS1, F20-GS2) --
+
+    @app.get("/geo/pack")
+    def geo_pack() -> dict:
+        return load_geo_pack().model_dump(mode="json")
+
+    @app.post("/geo/cost-lines", status_code=201)
+    def enter_cost_line(body: EnterCostLineRequest) -> dict:
+        try:
+            entry = geo_service.enter_cost_line(
+                body.commodity,
+                body.market,
+                body.line,
+                body.rate_paise_per_quintal,
+                body.entered_by,
+                body.entered_on,
+                body.note,
+            )
+        except GeoValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return entry.model_dump(mode="json")
+
+    @app.get("/geo/cost-lines")
+    def list_cost_lines(
+        commodity: str | None = Query(None), market: str | None = Query(None)
+    ) -> dict:
+        return {
+            "entries": [
+                e.model_dump(mode="json")
+                for e in geo_service.list_cost_lines(commodity, market)
+            ]
+        }
+
+    @app.post("/geo/basis-readings", status_code=201)
+    def strike_basis_reading(body: StrikeBasisRequest) -> dict:
+        try:
+            reading = geo_service.strike_basis_reading(
+                body.commodity, body.as_of
+            )
+        except GeoError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return geo_service.basis_view(reading.reading_id)
+
+    @app.get("/geo/basis-readings")
+    def list_basis_readings(commodity: str | None = Query(None)) -> dict:
+        return {
+            "readings": [
+                r.model_dump(mode="json")
+                for r in geo_service.list_basis_readings(commodity)
+            ]
+        }
+
+    @app.get("/geo/basis-readings/{reading_id}")
+    def get_basis_reading(reading_id: str) -> dict:
+        try:
+            return geo_service.basis_view(reading_id)
+        except GeoNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/geo/landed-comparisons", status_code=201)
+    def strike_landed_comparison(body: StrikeLandedRequest) -> dict:
+        try:
+            comparison = geo_service.strike_landed_comparison(
+                body.commodity, body.as_of, body.priced_for
+            )
+        except (GeoValidationError, GeoError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return geo_service.landed_view(comparison.comparison_id)
+
+    @app.get("/geo/landed-comparisons")
+    def list_landed_comparisons(commodity: str | None = Query(None)) -> dict:
+        return {
+            "comparisons": [
+                c.model_dump(mode="json")
+                for c in geo_service.list_landed_comparisons(commodity)
+            ]
+        }
+
+    @app.get("/geo/landed-comparisons/{comparison_id}")
+    def get_landed_comparison(comparison_id: str) -> dict:
+        try:
+            return geo_service.landed_view(comparison_id)
+        except GeoNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/geo/maps", status_code=201)
+    def strike_map(body: StrikeMapRequest) -> dict:
+        try:
+            market_map = geo_service.strike_map(body.commodity, body.as_of)
+        except GeoError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return geo_service.map_view(market_map.map_id)
+
+    @app.get("/geo/maps")
+    def list_maps(commodity: str | None = Query(None)) -> dict:
+        return {
+            "maps": [
+                m.model_dump(mode="json")
+                for m in geo_service.list_maps(commodity)
+            ]
+        }
+
+    @app.get("/geo/maps/{map_id}")
+    def get_map(map_id: str) -> dict:
+        try:
+            return geo_service.map_view(map_id)
+        except GeoNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/geo/maps/{map_id}/html")
+    def get_map_html(map_id: str) -> HTMLResponse:
+        try:
+            market_map = geo_service.get_map(map_id)
+        except GeoNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return HTMLResponse(market_map.html)
+
+    @app.get("/geo/verify")
+    def verify_geo_endpoint() -> dict:
+        return {"problems": geo_service.verify_all()}
 
     return app

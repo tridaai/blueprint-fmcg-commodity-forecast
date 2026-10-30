@@ -59,6 +59,12 @@ from fmcg_forecast.console.models import (
     ForecastRejection,
     PreflightReport,
 )
+from fmcg_forecast.geo.models import (
+    BasisReading,
+    CostLineEntry,
+    LandedComparison,
+    MarketMap,
+)
 from fmcg_forecast.intake.models import IntakeCheckAct, IntakeEntry
 from fmcg_forecast.signals.models import BuySignal
 from fmcg_forecast.thin.models import ThinAssessment
@@ -304,6 +310,35 @@ class Store(Protocol):
     def list_preflight_reports(
         self, commodity: str | None = None, market: str | None = None
     ) -> list[PreflightReport]: ...
+    # -- geospatial basis & netting (R14) -----------------------------
+    def insert_cost_line_entry(self, entry: CostLineEntry) -> None: ...
+    def get_cost_line_entry(
+        self, entry_id: str
+    ) -> CostLineEntry | None: ...
+    def list_cost_line_entries(
+        self, commodity: str | None = None, market: str | None = None
+    ) -> list[CostLineEntry]: ...
+    def insert_basis_reading(self, reading: BasisReading) -> None: ...
+    def get_basis_reading(
+        self, reading_id: str
+    ) -> BasisReading | None: ...
+    def list_basis_readings(
+        self, commodity: str | None = None
+    ) -> list[BasisReading]: ...
+    def insert_landed_comparison(
+        self, comparison: LandedComparison
+    ) -> None: ...
+    def get_landed_comparison(
+        self, comparison_id: str
+    ) -> LandedComparison | None: ...
+    def list_landed_comparisons(
+        self, commodity: str | None = None
+    ) -> list[LandedComparison]: ...
+    def insert_market_map(self, market_map: MarketMap) -> None: ...
+    def get_market_map(self, map_id: str) -> MarketMap | None: ...
+    def list_market_maps(
+        self, commodity: str | None = None
+    ) -> list[MarketMap]: ...
     def close(self) -> None: ...
 
 
@@ -2234,6 +2269,197 @@ class SqlStore:
         return [
             PreflightReport.model_validate(json.loads(r[0]))
             for r in cur.fetchall()
+        ]
+
+    # -- geospatial basis & netting (R14) -----------------------------
+    # Cost-line entries, basis readings, landed comparisons
+    # and market maps are insert-only, like every other
+    # artefact: the geo service checks the content address
+    # before inserting, so a re-entry or re-strike is a no-op
+    # rather than a duplicate-write error.
+
+    def insert_cost_line_entry(self, entry: CostLineEntry) -> None:
+        sql = self._q(
+            "INSERT INTO cost_line_entries (entry_id, commodity, "
+            "market, line, payload) VALUES (?, ?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                entry.entry_id,
+                entry.commodity,
+                entry.market,
+                entry.line,
+                entry.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_cost_line_entry(
+        self, entry_id: str
+    ) -> CostLineEntry | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM cost_line_entries "
+                "WHERE entry_id = ?"
+            ),
+            (entry_id,),
+        )
+        row = cur.fetchone()
+        return CostLineEntry.model_validate(json.loads(row[0])) if row else None
+
+    def list_cost_line_entries(
+        self, commodity: str | None = None, market: str | None = None
+    ) -> list[CostLineEntry]:
+        sql = "SELECT payload FROM cost_line_entries"
+        params: list = []
+        clauses = []
+        if commodity is not None:
+            clauses.append("commodity = ?")
+            params.append(commodity)
+        if market is not None:
+            clauses.append("market = ?")
+            params.append(market)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY commodity, market, line, entry_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            CostLineEntry.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    def insert_basis_reading(self, reading: BasisReading) -> None:
+        sql = self._q(
+            "INSERT INTO basis_readings (reading_id, commodity, "
+            "as_of, payload) VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                reading.reading_id,
+                reading.commodity,
+                self._date_param(reading.as_of),
+                reading.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_basis_reading(
+        self, reading_id: str
+    ) -> BasisReading | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM basis_readings WHERE reading_id = ?"
+            ),
+            (reading_id,),
+        )
+        row = cur.fetchone()
+        return BasisReading.model_validate(json.loads(row[0])) if row else None
+
+    def list_basis_readings(
+        self, commodity: str | None = None
+    ) -> list[BasisReading]:
+        sql = "SELECT payload FROM basis_readings"
+        params: list = []
+        if commodity is not None:
+            sql += " WHERE commodity = ?"
+            params.append(commodity)
+        sql += " ORDER BY commodity, as_of, reading_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            BasisReading.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    def insert_landed_comparison(
+        self, comparison: LandedComparison
+    ) -> None:
+        sql = self._q(
+            "INSERT INTO landed_comparisons (comparison_id, "
+            "commodity, as_of, payload) VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                comparison.comparison_id,
+                comparison.commodity,
+                self._date_param(comparison.as_of),
+                comparison.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_landed_comparison(
+        self, comparison_id: str
+    ) -> LandedComparison | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM landed_comparisons "
+                "WHERE comparison_id = ?"
+            ),
+            (comparison_id,),
+        )
+        row = cur.fetchone()
+        return (
+            LandedComparison.model_validate(json.loads(row[0])) if row else None
+        )
+
+    def list_landed_comparisons(
+        self, commodity: str | None = None
+    ) -> list[LandedComparison]:
+        sql = "SELECT payload FROM landed_comparisons"
+        params: list = []
+        if commodity is not None:
+            sql += " WHERE commodity = ?"
+            params.append(commodity)
+        sql += " ORDER BY commodity, as_of, comparison_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            LandedComparison.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    def insert_market_map(self, market_map: MarketMap) -> None:
+        sql = self._q(
+            "INSERT INTO market_maps (map_id, commodity, as_of, "
+            "payload) VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                market_map.map_id,
+                market_map.commodity,
+                self._date_param(market_map.as_of),
+                market_map.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_market_map(self, map_id: str) -> MarketMap | None:
+        cur = self._conn.execute(
+            self._q("SELECT payload FROM market_maps WHERE map_id = ?"),
+            (map_id,),
+        )
+        row = cur.fetchone()
+        return MarketMap.model_validate(json.loads(row[0])) if row else None
+
+    def list_market_maps(
+        self, commodity: str | None = None
+    ) -> list[MarketMap]:
+        sql = "SELECT payload FROM market_maps"
+        params: list = []
+        if commodity is not None:
+            sql += " WHERE commodity = ?"
+            params.append(commodity)
+        sql += " ORDER BY commodity, as_of, map_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            MarketMap.model_validate(json.loads(r[0])) for r in cur.fetchall()
         ]
 
     def close(self) -> None:
