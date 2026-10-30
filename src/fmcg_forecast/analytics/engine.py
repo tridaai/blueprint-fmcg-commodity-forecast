@@ -297,6 +297,7 @@ def _outcome_row(
         "as_of": signal.as_of,
         "signal_id": signal.signal_id,
         "forecast_id": signal.forecast_id,
+        "horizon_days": signal.horizon_days,
         "value": signal.value,
         "base_value": signal.base_value,
         "caps_applied": list(signal.caps_applied),

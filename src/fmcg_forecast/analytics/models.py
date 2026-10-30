@@ -25,7 +25,12 @@ were struck under. It has four sections:
 
 Nothing in a report is authored: the same store always
 recomputes the same report, which is what lets the verifier
-re-perform it field for field.
+re-perform it field for field. A report is struck from the
+artefact set standing at build time; when the set moves on —
+a new backtest result, signal or event lands — the older
+report's re-performance names the drift instead of passing
+silently, and a rebuild strikes the current record. The
+superseded report stays on record, flagged, never edited.
 """
 
 from __future__ import annotations
@@ -102,6 +107,7 @@ class SignalOutcomeRow(BaseModel):
         "address for grid rows)"
     )
     forecast_id: str = Field(description="The forecast the signal pinned")
+    horizon_days: int = Field(description="The horizon the signal judged at")
     value: str = Field(description="The call, after caps: buy_now | phased | wait")
     base_value: str = Field(description="The call before accuracy caps")
     caps_applied: list[str]
