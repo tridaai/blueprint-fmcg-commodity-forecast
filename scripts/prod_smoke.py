@@ -85,7 +85,7 @@ def main() -> int:
         store = build_store(database_url=url)
         truth_store = build_truth_store(database_url=url)
         applied = [
-            r[0]
+            r[0].decode() if isinstance(r[0], bytes) else r[0]
             for r in store._conn.execute(
                 "SELECT name FROM schema_migrations ORDER BY name"
             ).fetchall()

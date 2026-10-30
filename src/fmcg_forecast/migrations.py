@@ -35,7 +35,13 @@ def apply_migrations(conn, dialect: str, placeholder: str = "?") -> list[str]:
     conn.execute(
         "CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY)"
     )
-    applied = {row[0] for row in conn.execute("SELECT name FROM schema_migrations")}
+    # Under a SQL_ASCII database psycopg hands text back as
+    # bytes; decode, or the filename comparison silently
+    # misses and every migration re-applies.
+    applied = {
+        row[0].decode() if isinstance(row[0], bytes) else row[0]
+        for row in conn.execute("SELECT name FROM schema_migrations")
+    }
     done: list[str] = []
     for path in migration_files(dialect):
         if path.name in applied:
