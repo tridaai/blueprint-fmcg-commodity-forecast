@@ -53,7 +53,7 @@ class TruthStore:
             "INSERT INTO truth_observations (commodity, market, obs_date, driver, value) "
             "VALUES (?, ?, ?, ?, ?)"
         )
-        self._conn.executemany(
+        self._conn.cursor().executemany(
             sql,
             [
                 (r.commodity, r.market, self._date_param(r.obs_date), r.driver, r.value)

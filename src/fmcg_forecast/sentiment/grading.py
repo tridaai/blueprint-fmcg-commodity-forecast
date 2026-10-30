@@ -51,7 +51,7 @@ class SentimentGradingStore:
         sql = self._q(
             "INSERT INTO sentiment_intent (item_id, payload) VALUES (?, ?)"
         )
-        self._conn.executemany(
+        self._conn.cursor().executemany(
             sql, [(i.item_id, i.model_dump_json()) for i in intents]
         )
         if self.dialect == "sqlite":
