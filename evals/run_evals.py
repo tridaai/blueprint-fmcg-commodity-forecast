@@ -322,6 +322,35 @@ F20-OW4 + F20-MF2), also zero-tolerance:
   any field from the same act struck through the canonical
   service path on a twin store holding the same artefact.
 
+Round 14 counters (geospatial basis & netting, F20-PO4 +
+F20-GS1 + F20-GS2), also zero-tolerance:
+
+- geo_basis_band_errors: a basis band edge, median, paired
+  count or classification that disagrees with an independent
+  recomputation from the raw observation series, a spread
+  classified below the pack's paired-days floor, or a
+  tampered reading the re-performance verifier accepts.
+- geo_cost_line_errors: a cost-line entry the service
+  accepts outside the pack's catalogue (an unlisted line, a
+  negative or non-integer rate, an unnamed enterer), a
+  standing head that is not the fold's latest entry, or an
+  entry whose desk provenance does not survive the store.
+- geo_landed_cost_errors: a landed figure that is not the
+  stored price plus the standing entered lines to the
+  paise, a market missing a line that reads computable or
+  carries an assumed rate anywhere, or a ranking that
+  departs from the pack's rule.
+- geo_map_errors: a map cell whose price, basis
+  classification, spread or alert state disagrees with the
+  artefact reads it composes, a rendered page that differs
+  from the artefact's own re-render, or a pinned reading
+  that is not the map's stated basis artefact.
+- geo_overlay_errors: a weather deviation that disagrees
+  with a recomputation from the stored weather-index facts
+  alone, an event shown active outside its registry
+  window, or a window covering the as-of that the map
+  omits.
+
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
 
@@ -364,6 +393,7 @@ def truth_isolation_violations() -> int:
         + list((base / "ingest").rglob("*.py"))
         + list((base / "analytics").rglob("*.py"))
         + list((base / "console").rglob("*.py"))
+        + list((base / "geo").rglob("*.py"))
     )
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -469,6 +499,11 @@ def main() -> int:
         "console_rejection_errors": 0,
         "console_triage_errors": 0,
         "console_action_parity_errors": 0,
+        "geo_basis_band_errors": 0,
+        "geo_cost_line_errors": 0,
+        "geo_landed_cost_errors": 0,
+        "geo_map_errors": 0,
+        "geo_overlay_errors": 0,
     }
 
     # --- planted events, measured seasonally-matched ---------------
@@ -3181,7 +3216,345 @@ def main() -> int:
     if _door_act != _direct_act.model_dump(mode="json"):
         counters["console_action_parity_errors"] += 1
 
-    print("Round 13 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio + R7 prompt-to-dashboard + R8 buy signals & coverage planning + R9 alerting, subscriptions & escalation + R10 thin-data depth & assisted intake + R11 production data plane + R12 forecast-ops analytics & shock grading + R13 operator console: review queue & rejection, event triage gate, coverage pre-flight, phone action parity)")
+    # --- Round 14: geospatial basis & netting (F20-PO4 +
+    # F20-GS1 + F20-GS2). The basis band re-performed from
+    # the raw series by an independent pairing written here;
+    # landed figures checked to the paise against the stored
+    # prices and the standing fold; map cells checked against
+    # every artefact read they compose.
+    from datetime import date as _date14
+    from datetime import datetime as _datetime14
+
+    from fmcg_forecast.alerts.engine import fold_state as _fold_state14
+    from fmcg_forecast.alerts.models import (
+        AlertInstance as _AlertInstance14,
+    )
+    from fmcg_forecast.alerts.pack import (
+        SEVERITY_RANK as _SEVERITY_RANK14,
+    )
+    from fmcg_forecast.alerts.pack import (
+        load_alert_pack as _load_alert_pack14,
+    )
+    from fmcg_forecast.geo.engine import (
+        compute_weather_row as _weather_row14,
+    )
+    from fmcg_forecast.geo.engine import to_paise as _to_paise14
+    from fmcg_forecast.geo.pack import load_geo_pack as _load_geo_pack14
+    from fmcg_forecast.geo.render import (
+        render_market_map as _render_map14,
+    )
+    from fmcg_forecast.geo.service import (
+        GeoService as _GeoService14,
+    )
+    from fmcg_forecast.geo.service import (
+        GeoValidationError as _GeoValidationError14,
+    )
+    from fmcg_forecast.geo.verify import (
+        verify_basis_reading as _verify_basis14,
+    )
+    from fmcg_forecast.geo.verify import (
+        verify_cost_line_entry as _verify_entry14,
+    )
+    from fmcg_forecast.geo.verify import (
+        verify_landed_comparison as _verify_landed14,
+    )
+    from fmcg_forecast.geo.verify import (
+        verify_market_map as _verify_map14,
+    )
+
+    _gpack14 = _load_geo_pack14()
+    _geo14 = _GeoService14(store)
+    _asof14 = _date14(2025, 12, 31)
+
+    def _paired14(commodity, market, reference, start, end):
+        own = {
+            r.obs_date: _to_paise14(r.value)
+            for r in store.series(commodity, market, "modal_price", None, end)
+        }
+        ref = {
+            r.obs_date: _to_paise14(r.value)
+            for r in store.series(
+                commodity, reference, "modal_price", None, end
+            )
+        }
+        return [
+            (d, own[d] - ref[d])
+            for d in sorted(own.keys() & ref.keys())
+            if start <= d <= end
+        ]
+
+    def _quantile14(values, q):
+        ordered = sorted(values)
+        rank = q * (len(ordered) - 1)
+        low = int(rank)
+        high = min(low + 1, len(ordered) - 1)
+        if low == high:
+            return ordered[low]
+        return int(round(
+            ordered[low] * (1 - (rank - low))
+            + ordered[high] * (rank - low)
+        ))
+
+    # basis: every band figure re-performed independently
+    _reading14 = _geo14.strike_basis_reading("wheat", _asof14)
+    _window_start14 = _asof14 - timedelta(
+        days=_gpack14.band_window_days - 1
+    )
+    for _row14 in _reading14.rows:
+        _pairs14 = _paired14(
+            "wheat", _row14.market, _reading14.reference_market,
+            _window_start14, _asof14,
+        )
+        if len(_pairs14) != _row14.paired_days:
+            counters["geo_basis_band_errors"] += 1
+        if not _pairs14:
+            if _row14.classification != "no_paired_history":
+                counters["geo_basis_band_errors"] += 1
+            continue
+        _spreads14 = [s for _, s in _pairs14]
+        if _row14.band_low_paise != _quantile14(
+            _spreads14, _gpack14.band_low_quantile
+        ):
+            counters["geo_basis_band_errors"] += 1
+        if _row14.band_median_paise != _quantile14(_spreads14, 0.50):
+            counters["geo_basis_band_errors"] += 1
+        if _row14.band_high_paise != _quantile14(
+            _spreads14, _gpack14.band_high_quantile
+        ):
+            counters["geo_basis_band_errors"] += 1
+        if _row14.current_spread_paise != _pairs14[-1][1]:
+            counters["geo_basis_band_errors"] += 1
+        if _row14.market == _reading14.reference_market:
+            if _row14.classification != "reference":
+                counters["geo_basis_band_errors"] += 1
+        elif len(_pairs14) < _gpack14.min_paired_days:
+            if _row14.classification != "insufficient_history":
+                counters["geo_basis_band_errors"] += 1
+        else:
+            _expected14 = (
+                "wide" if _pairs14[-1][1] > _row14.band_high_paise
+                else "narrow" if _pairs14[-1][1] < _row14.band_low_paise
+                else "within"
+            )
+            if _row14.classification != _expected14:
+                counters["geo_basis_band_errors"] += 1
+    if _verify_basis14(store, _reading14):
+        counters["geo_basis_band_errors"] += 1
+    # below the floor: an early as-of over the young record
+    _early14 = _geo14.strike_basis_reading("wheat", _date14(2023, 2, 15))
+    for _row14 in _early14.rows:
+        if _row14.market == _early14.reference_market:
+            continue
+        if _row14.paired_days >= _gpack14.min_paired_days:
+            counters["geo_basis_band_errors"] += 1
+        if _row14.classification != "insufficient_history":
+            counters["geo_basis_band_errors"] += 1
+    # a tampered reading must not verify
+    _tampered14 = _reading14.model_copy(
+        update={
+            "rows": [
+                r.model_copy(update={"current_spread_paise": 1})
+                if r.market == "indore" else r
+                for r in _reading14.rows
+            ]
+        }
+    )
+    if not _verify_basis14(store, _tampered14):
+        counters["geo_basis_band_errors"] += 1
+    # coffee: a single-market commodity reads reference-only
+    _coffee14 = _geo14.strike_basis_reading("coffee", _asof14)
+    if len(_coffee14.rows) != 1 or (
+        _coffee14.rows[0].classification != "reference"
+    ):
+        counters["geo_basis_band_errors"] += 1
+
+    # cost lines: the catalogue is the only door, the fold
+    # is the standing rate, provenance rides every entry
+    for _market14 in ("delhi_khari_baoli", "indore", "kanpur"):
+        _geo14.enter_cost_line(
+            "wheat", _market14, "freight", 30000, "a.rao", _asof14
+        )
+        _geo14.enter_cost_line(
+            "wheat", _market14, "handling", 8000, "a.rao", _asof14
+        )
+    _geo14.enter_cost_line(
+        "soybean", "indore", "freight", 45000, "a.rao", _asof14
+    )
+    for _bad14 in (
+        ("wheat", "indore", "insurance", 100, "a.rao"),
+        ("wheat", "indore", "freight", -1, "a.rao"),
+        ("wheat", "indore", "freight", 100, "  "),
+        ("wheat", "guntur", "freight", 100, "a.rao"),
+    ):
+        try:
+            _geo14.enter_cost_line(
+                *_bad14[:3], _bad14[3], _bad14[4], _asof14
+            )
+            counters["geo_cost_line_errors"] += 1
+        except _GeoValidationError14:
+            pass
+    for _entry14 in store.list_cost_line_entries():
+        if _verify_entry14(_entry14):
+            counters["geo_cost_line_errors"] += 1
+        if _entry14.origin != "desk_entered" or not _entry14.entered_by:
+            counters["geo_cost_line_errors"] += 1
+    _fold_first14 = _geo14.enter_cost_line(
+        "groundnut", "rajkot", "freight", 20000,
+        "a.rao", _date14(2025, 12, 1),
+    )
+    _fold_head14 = _geo14.enter_cost_line(
+        "groundnut", "rajkot", "freight", 22000,
+        "d.kaur", _date14(2025, 12, 20),
+    )
+    if _geo14.head_cost_lines("groundnut", "rajkot")["freight"].entry_id != (
+        _fold_head14.entry_id
+    ):
+        counters["geo_cost_line_errors"] += 1
+    # the fold is as-of scoped: before the second entry
+    # landed, the first still stood
+    if _geo14.head_cost_lines(
+        "groundnut", "rajkot", _date14(2025, 12, 10)
+    )["freight"].entry_id != _fold_first14.entry_id:
+        counters["geo_cost_line_errors"] += 1
+
+    # landed: figures to the paise, missing lines named,
+    # rankings by the pack's rule only
+    _landed14 = _geo14.strike_landed_comparison(
+        "wheat", _asof14, "verdanta_plant"
+    )
+    _heads14 = {
+        m: _geo14.head_cost_lines("wheat", m, _asof14)
+        for m in ("delhi_khari_baoli", "indore", "kanpur")
+    }
+    for _row14 in _landed14.rows:
+        _last14 = store.series(
+            "wheat", _row14.market, "modal_price", None, _asof14
+        )[-1]
+        if _row14.price_paise != _to_paise14(_last14.value):
+            counters["geo_landed_cost_errors"] += 1
+        _expected14 = _row14.price_paise + sum(
+            e.rate_paise_per_quintal
+            for e in _heads14[_row14.market].values()
+        )
+        if _row14.state != "computable" or _row14.landed_paise != _expected14:
+            counters["geo_landed_cost_errors"] += 1
+    _ranked14 = sorted(
+        (r for r in _landed14.rows if r.rank is not None),
+        key=lambda r: r.rank,
+    )
+    if [r.market for r in _ranked14] != [
+        r.market
+        for r in sorted(
+            _landed14.rows, key=lambda r: (r.landed_paise, r.market)
+        )
+    ]:
+        counters["geo_landed_cost_errors"] += 1
+    if _verify_landed14(store, _landed14):
+        counters["geo_landed_cost_errors"] += 1
+    _soy_landed14 = _geo14.strike_landed_comparison(
+        "soybean", _asof14, "verdanta_plant"
+    )
+    _soy_rows14 = {r.market: r for r in _soy_landed14.rows}
+    if _soy_rows14["indore"].missing_lines != ["handling"]:
+        counters["geo_landed_cost_errors"] += 1
+    if _soy_rows14["nagpur"].missing_lines != ["freight", "handling"]:
+        counters["geo_landed_cost_errors"] += 1
+    for _row14 in _soy_landed14.rows:
+        if (
+            _row14.state != "not_computable"
+            or _row14.landed_paise is not None
+            or _row14.rank is not None
+        ):
+            counters["geo_landed_cost_errors"] += 1
+        for _line14 in _row14.lines:
+            if (
+                _line14.state == "missing"
+                and _line14.rate_paise_per_quintal is not None
+            ):
+                counters["geo_landed_cost_errors"] += 1
+
+    # the map: cells equal the artefact reads they compose
+    _alert14 = _AlertInstance14(
+        alert_id="ALT-evalgeo",
+        subscription_id="SUB-eval", subscriber="d.kaur",
+        kind="buy_signal", commodity="wheat", market="indore",
+        severity="major", trigger_id="SIG-eval",
+        trigger_summary={"value": "buy_now"},
+        raised_at=_datetime14(2025, 12, 1, 9, 0),
+        pack_version=_load_alert_pack14().version,
+        scope_note="signal only — no trade is placed",
+    )
+    store.insert_alert(_alert14)
+    _map14 = _geo14.strike_map("wheat", _asof14)
+    if _map14.basis_reading_id != _reading14.reading_id:
+        counters["geo_map_errors"] += 1
+    _basis_rows14 = {r.market: r for r in _reading14.rows}
+    _now14 = _datetime14(2025, 12, 31, 23, 59, 59)
+    for _cell14 in _map14.cells:
+        _last14 = store.series(
+            "wheat", _cell14.market, "modal_price", None, _asof14
+        )
+        if not _last14:
+            if _cell14.data_state != "no_current_data":
+                counters["geo_map_errors"] += 1
+        elif _cell14.price_paise != _to_paise14(_last14[-1].value):
+            counters["geo_map_errors"] += 1
+        _brow14 = _basis_rows14[_cell14.market]
+        if (
+            _cell14.basis_classification != _brow14.classification
+            or _cell14.current_spread_paise
+            != _brow14.current_spread_paise
+        ):
+            counters["geo_map_errors"] += 1
+        _open14 = 0
+        _top14 = None
+        for _a14 in store.list_alerts("wheat", _cell14.market):
+            if _a14.raised_at > _now14:
+                continue
+            _acts14 = [
+                a for a in store.list_alert_acts(_a14.alert_id)
+                if a.acted_at <= _now14
+            ]
+            if _fold_state14(
+                _a14, _acts14, _now14, _load_alert_pack14()
+            )["state"] == "closed":
+                continue
+            _open14 += 1
+            if _top14 is None or (
+                _SEVERITY_RANK14[_a14.severity] > _SEVERITY_RANK14[_top14]
+            ):
+                _top14 = _a14.severity
+        if _cell14.open_alerts != _open14 or _cell14.top_severity != _top14:
+            counters["geo_map_errors"] += 1
+        _wrow14 = _weather_row14(
+            store, "wheat", _cell14.market, _asof14, _gpack14
+        )
+        if _cell14.weather != _wrow14:
+            counters["geo_overlay_errors"] += 1
+    if _map14.html != _render_map14(_map14):
+        counters["geo_map_errors"] += 1
+    if _verify_map14(store, _map14):
+        counters["geo_map_errors"] += 1
+    # the overlay: event windows are the registry's, verbatim
+    _soy_map14 = _geo14.strike_map("soybean", _date14(2025, 6, 20))
+    _active_ids14 = [e.event_id for e in _soy_map14.active_events]
+    _tariff14 = next(
+        e for e in store.list_market_events("soybean")
+        if e.source_record_id == "EVT-2025-TARIFF-SOYBEAN"
+    )
+    if _tariff14.event_id not in _active_ids14:
+        counters["geo_overlay_errors"] += 1
+    for _event14 in store.list_market_events("soybean"):
+        _covers14 = _event14.window_start <= _date14(2025, 6, 20) and (
+            _event14.window_end is None
+            or _date14(2025, 6, 20) <= _event14.window_end
+        )
+        if _covers14 != (_event14.event_id in _active_ids14):
+            counters["geo_overlay_errors"] += 1
+    if _verify_map14(store, _soy_map14):
+        counters["geo_map_errors"] += 1
+
+    print("Round 14 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio + R7 prompt-to-dashboard + R8 buy signals & coverage planning + R9 alerting, subscriptions & escalation + R10 thin-data depth & assisted intake + R11 production data plane + R12 forecast-ops analytics & shock grading + R13 operator console: review queue & rejection, event triage gate, coverage pre-flight, phone action parity + R14 geospatial basis & netting: basis bands, desk cost lines, landed comparisons, market map and weather/event overlay)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]

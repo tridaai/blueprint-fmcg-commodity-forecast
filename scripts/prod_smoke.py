@@ -21,7 +21,14 @@ before it serves:
   migration chain includes the console tables, and a struck
   pre-flight and a rejection act on the Postgres store are
   byte-identical to the same artefacts struck on a full
-  SQLite store over the same record (dialect parity, gap 0).
+  SQLite store over the same record (dialect parity, gap 0);
+- the R14 geo layer works on this profile too: cost lines
+  entered on the Postgres store price a landed comparison,
+  and the basis reading, the landed comparison and the
+  market map are byte-identical to the same artefacts
+  struck on a full SQLite store over the same record
+  (dialect parity, gap 0), with the layer re-performing
+  clean on the Postgres profile.
 
 Usage: DATABASE_URL=postgresql://... python scripts/prod_smoke.py
 Exits 0 when every check passes, 1 otherwise.
@@ -244,6 +251,72 @@ def main() -> int:
                         "across profiles"
                     )
         print("console parity: pre-flights and the rejection act "
+              "identical across profiles (gap 0)")
+
+        # --- R14: the geo layer on this profile -------------------
+        from fmcg_forecast.geo.service import GeoService
+        from fmcg_forecast.geo.verify import verify_geo
+        from fmcg_forecast.sentiment.service import SentimentService
+
+        pg_geo = GeoService(store)
+        for market in ("delhi_khari_baoli", "indore", "kanpur"):
+            pg_geo.enter_cost_line(
+                "wheat", market, "freight", 30000, "a.rao",
+                date(2025, 12, 30),
+            )
+            pg_geo.enter_cost_line(
+                "wheat", market, "handling", 8000, "a.rao",
+                date(2025, 12, 30),
+            )
+        pg_basis = pg_geo.strike_basis_reading("wheat", date(2025, 12, 31))
+        pg_landed = pg_geo.strike_landed_comparison(
+            "wheat", date(2025, 12, 31), "verdanta_plant"
+        )
+        pg_map = pg_geo.strike_map("soybean", date(2025, 6, 20))
+        if verify_geo(store):
+            problems.append(
+                f"geo layer does not verify on Postgres: {verify_geo(store)}"
+            )
+        with tempfile.TemporaryDirectory() as tmp:
+            lite = build_store(str(Path(tmp) / "geo.db"))
+            lite_truth = build_truth_store(str(Path(tmp) / "geo_truth.db"))
+            load_dataset(lite, lite_truth, data.manifest.seed)
+            run_all(lite)
+            lite_grading = build_sentiment_grading_store(
+                str(Path(tmp) / "geo_grading.db")
+            )
+            load_sentiment_corpus(lite, lite_grading, data.manifest.seed)
+            SentimentService(lite, OfflineModel()).run_pipeline()
+            EventService(lite).seed_historical(lite.get_manifest())
+            lite_geo = GeoService(lite)
+            for market in ("delhi_khari_baoli", "indore", "kanpur"):
+                lite_geo.enter_cost_line(
+                    "wheat", market, "freight", 30000, "a.rao",
+                    date(2025, 12, 30),
+                )
+                lite_geo.enter_cost_line(
+                    "wheat", market, "handling", 8000, "a.rao",
+                    date(2025, 12, 30),
+                )
+            lite_basis = lite_geo.strike_basis_reading(
+                "wheat", date(2025, 12, 31)
+            )
+            lite_landed = lite_geo.strike_landed_comparison(
+                "wheat", date(2025, 12, 31), "verdanta_plant"
+            )
+            lite_map = lite_geo.strike_map("soybean", date(2025, 6, 20))
+            for name, pg_art, lite_art in (
+                ("basis reading", pg_basis, lite_basis),
+                ("landed comparison", pg_landed, lite_landed),
+                ("market map", pg_map, lite_map),
+            ):
+                if pg_art.model_dump(mode="json") != (
+                    lite_art.model_dump(mode="json")
+                ):
+                    problems.append(
+                        f"geo parity: the {name} differs across profiles"
+                    )
+        print("geo parity: basis, landed and map artefacts "
               "identical across profiles (gap 0)")
     finally:
         # The app under test holds its own store connection;

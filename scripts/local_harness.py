@@ -12,6 +12,12 @@ and the declared event landing on a forecast as its own line.
 Round 6 adds the scenario studio: the pack read, a typed what-if
 parsed and refused over HTTP, the fork run with its diff, and
 the adoption gate from placeholder refusal to the adopted view.
+Round 14 adds geospatial basis & netting: the geo pack, a desk
+cost line landing with its provenance (and an uncatalogued line
+refused), a basis reading against the reference market, a
+landed comparison naming its missing handling line, and the
+market map inside the planted tariff window carrying the
+event overlay.
 """
 
 from __future__ import annotations
@@ -553,6 +559,88 @@ def main() -> int:
         r = client.get(f"{BASE}/console/verify")
         checks.append(
             ("console re-performs clean", r.status_code == 200 and r.json()["problems"] == [])
+        )
+        # --- Round 14: geospatial basis & netting over HTTP ---------------
+        r = client.get(f"{BASE}/geo/pack")
+        checks.append(
+            ("geo pack reads", r.status_code == 200 and r.json()["version"] == "2026.10.1")
+        )
+        r = client.post(
+            f"{BASE}/geo/cost-lines",
+            json={"commodity": "wheat", "market": "indore", "line": "freight",
+                  "rate_paise_per_quintal": 45000, "entered_by": "a.rao",
+                  "entered_on": "2025-12-30"},
+        )
+        checks.append(
+            ("desk cost line lands with its provenance",
+             r.status_code == 201 and r.json()["origin"] == "desk_entered")
+        )
+        r = client.post(
+            f"{BASE}/geo/cost-lines",
+            json={"commodity": "wheat", "market": "indore", "line": "insurance",
+                  "rate_paise_per_quintal": 100, "entered_by": "a.rao",
+                  "entered_on": "2025-12-30"},
+        )
+        checks.append(("an uncatalogued cost line is refused", r.status_code == 422))
+        r = client.post(
+            f"{BASE}/geo/basis-readings",
+            json={"commodity": "wheat", "as_of": "2025-12-31"},
+        )
+        basis_rows = {row["market"]: row for row in r.json()["rows"]} if r.status_code == 201 else {}
+        checks.append(
+            (
+                "basis reading strikes against the reference market",
+                r.status_code == 201
+                and basis_rows.get("delhi_khari_baoli", {}).get("classification") == "reference"
+                and basis_rows.get("indore", {}).get("paired_days", 0) >= 60
+                and r.json()["problems"] == [],
+            )
+        )
+        r = client.post(
+            f"{BASE}/geo/landed-comparisons",
+            json={"commodity": "wheat", "as_of": "2025-12-31",
+                  "priced_for": "verdanta_plant"},
+        )
+        landed_rows = {row["market"]: row for row in r.json()["rows"]} if r.status_code == 201 else {}
+        checks.append(
+            (
+                "landed names the missing handling line",
+                r.status_code == 201
+                and landed_rows.get("indore", {}).get("state") == "not_computable"
+                and landed_rows.get("indore", {}).get("missing_lines") == ["handling"]
+                and landed_rows.get("indore", {}).get("landed_paise") is None,
+            )
+        )
+        r = client.get(f"{BASE}/market-events")
+        tariff_id = next(
+            (
+                e["event_id"] for e in r.json()["events"]
+                if e.get("source_record_id") == "EVT-2025-TARIFF-SOYBEAN"
+            ),
+            None,
+        )
+        r = client.post(
+            f"{BASE}/geo/maps",
+            json={"commodity": "soybean", "as_of": "2025-06-20"},
+        )
+        map_id = r.json()["map_id"] if r.status_code == 201 else None
+        checks.append(
+            (
+                "the map inside the tariff window carries the event overlay",
+                r.status_code == 201
+                and tariff_id
+                in [e["event_id"] for e in r.json()["active_events"]]
+                and r.json()["problems"] == [],
+            )
+        )
+        r = client.get(f"{BASE}/geo/maps/{map_id}/html")
+        checks.append(
+            ("the map page renders its markets",
+             r.status_code == 200 and "Indore" in r.text and "Nagpur" in r.text)
+        )
+        r = client.get(f"{BASE}/geo/verify")
+        checks.append(
+            ("geo layer re-performs clean", r.status_code == 200 and r.json()["problems"] == [])
         )
         for name, ok in checks:
             print(f"  {'PASS' if ok else 'FAIL'}  {name}")
