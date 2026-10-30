@@ -343,26 +343,40 @@ def test_report_names_a_stored_desk_signal_pending(graded, tmp_path):
 
 
 def test_tampered_report_is_flagged(graded):
-    store, db = graded
+    # tamper through the store's OWN connection (the store runs
+    # in WAL mode, so a file copy or a second connection sees the
+    # row only after a checkpoint — the own-connection write is
+    # the deterministic one), and restore the original payload
+    # afterwards so the shared fixture stays clean for the
+    # surface tests that follow
+    store, _ = graded
     report = AnalyticsService(store).build_report()
-    conn = sqlite3.connect(db)
-    payload = json.loads(
-        conn.execute(
-            "SELECT payload FROM ops_reports WHERE report_id = ?",
-            (report.report_id,),
-        ).fetchone()[0]
-    )
+    conn = store._conn
+    original = conn.execute(
+        "SELECT payload FROM ops_reports WHERE report_id = ?",
+        (report.report_id,),
+    ).fetchone()[0]
+    payload = json.loads(original)
     payload["trends"][0]["late_mape"] = 99.0
     conn.execute(
         "UPDATE ops_reports SET payload = ? WHERE report_id = ?",
         (json.dumps(payload), report.report_id),
     )
     conn.commit()
-    conn.close()
-    problems = verify_report(store, store.get_ops_report(report.report_id))
+    try:
+        problems = verify_report(
+            store, store.get_ops_report(report.report_id)
+        )
+    finally:
+        conn.execute(
+            "UPDATE ops_reports SET payload = ? WHERE report_id = ?",
+            (original, report.report_id),
+        )
+        conn.commit()
     assert problems
     assert any("content id mismatch" in p for p in problems)
     assert any("re-performance mismatch" in p for p in problems)
+    assert verify_report(store, store.get_ops_report(report.report_id)) == []
 
 
 # --- surfaces ---------------------------------------------------------------------
