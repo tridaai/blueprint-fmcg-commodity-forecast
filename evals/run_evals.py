@@ -2376,7 +2376,7 @@ def main() -> int:
 
     # tamper: a quarantine record altered in place is caught
     _conn = _sqlite3.connect(str(tmp / "evals.db"))
-    _payload = json.loads(
+    _payload = _json.loads(
         _conn.execute(
             "SELECT payload FROM ingest_quarantine WHERE quarantine_id = ?",
             (_q3.quarantine_id,),
@@ -2385,7 +2385,7 @@ def main() -> int:
     _payload["reasons"] = ["future_date"]
     _conn.execute(
         "UPDATE ingest_quarantine SET payload = ? WHERE quarantine_id = ?",
-        (json.dumps(_payload), _q3.quarantine_id),
+        (_json.dumps(_payload), _q3.quarantine_id),
     )
     _conn.commit()
     _conn.close()
