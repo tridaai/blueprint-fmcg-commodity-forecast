@@ -54,6 +54,11 @@ from fmcg_forecast.ingest.models import (
     SourceRegistration,
 )
 from fmcg_forecast.analytics.models import OpsReport
+from fmcg_forecast.console.models import (
+    EventTriageAct,
+    ForecastRejection,
+    PreflightReport,
+)
 from fmcg_forecast.intake.models import IntakeCheckAct, IntakeEntry
 from fmcg_forecast.signals.models import BuySignal
 from fmcg_forecast.thin.models import ThinAssessment
@@ -283,6 +288,22 @@ class Store(Protocol):
     def insert_ops_report(self, report: OpsReport) -> None: ...
     def get_ops_report(self, report_id: str) -> OpsReport | None: ...
     def list_ops_reports(self) -> list[OpsReport]: ...
+    # -- operator console (R13) --------------------------------------
+    def insert_forecast_rejection(self, rejection: ForecastRejection) -> None: ...
+    def get_forecast_rejection(
+        self, forecast_id: str
+    ) -> ForecastRejection | None: ...
+    def list_forecast_rejections(self) -> list[ForecastRejection]: ...
+    def insert_event_triage_act(self, act: EventTriageAct) -> None: ...
+    def get_event_triage_act(self, act_id: str) -> EventTriageAct | None: ...
+    def list_event_triage_acts(
+        self, event_id: str | None = None
+    ) -> list[EventTriageAct]: ...
+    def insert_preflight_report(self, report: PreflightReport) -> None: ...
+    def get_preflight_report(self, report_id: str) -> PreflightReport | None: ...
+    def list_preflight_reports(
+        self, commodity: str | None = None, market: str | None = None
+    ) -> list[PreflightReport]: ...
     def close(self) -> None: ...
 
 
@@ -2082,6 +2103,137 @@ class SqlStore:
         )
         return [
             OpsReport.model_validate(json.loads(r[0])) for r in cur.fetchall()
+        ]
+
+    # -- operator console artefacts (R13) ------------------------------
+    # Insert-only payload tables in the standing idiom: the
+    # services check the content address before inserting, so
+    # re-striking the same act or report is a no-op rather than
+    # a duplicate-write error. Review and triage states are
+    # folds of these acts, derived at read — never columns.
+
+    def insert_forecast_rejection(self, rejection: ForecastRejection) -> None:
+        sql = self._q(
+            "INSERT INTO forecast_rejections (rejection_id, "
+            "forecast_id, payload) VALUES (?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                rejection.rejection_id,
+                rejection.forecast_id,
+                rejection.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_forecast_rejection(
+        self, forecast_id: str
+    ) -> ForecastRejection | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM forecast_rejections "
+                "WHERE forecast_id = ?"
+            ),
+            (forecast_id,),
+        )
+        row = cur.fetchone()
+        return ForecastRejection.model_validate(json.loads(row[0])) if row else None
+
+    def list_forecast_rejections(self) -> list[ForecastRejection]:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM forecast_rejections "
+                "ORDER BY forecast_id"
+            )
+        )
+        return [
+            ForecastRejection.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    def insert_event_triage_act(self, act: EventTriageAct) -> None:
+        sql = self._q(
+            "INSERT INTO event_triage_acts (act_id, event_id, "
+            "payload) VALUES (?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (act.act_id, act.event_id, act.model_dump_json()),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_event_triage_act(self, act_id: str) -> EventTriageAct | None:
+        cur = self._conn.execute(
+            self._q("SELECT payload FROM event_triage_acts WHERE act_id = ?"),
+            (act_id,),
+        )
+        row = cur.fetchone()
+        return EventTriageAct.model_validate(json.loads(row[0])) if row else None
+
+    def list_event_triage_acts(
+        self, event_id: str | None = None
+    ) -> list[EventTriageAct]:
+        sql = "SELECT payload FROM event_triage_acts"
+        params: list = []
+        if event_id is not None:
+            sql += " WHERE event_id = ?"
+            params.append(event_id)
+        sql += " ORDER BY act_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            EventTriageAct.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    def insert_preflight_report(self, report: PreflightReport) -> None:
+        sql = self._q(
+            "INSERT INTO preflight_reports (report_id, commodity, "
+            "market, payload) VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                report.report_id,
+                report.commodity,
+                report.market,
+                report.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_preflight_report(self, report_id: str) -> PreflightReport | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM preflight_reports WHERE report_id = ?"
+            ),
+            (report_id,),
+        )
+        row = cur.fetchone()
+        return PreflightReport.model_validate(json.loads(row[0])) if row else None
+
+    def list_preflight_reports(
+        self, commodity: str | None = None, market: str | None = None
+    ) -> list[PreflightReport]:
+        sql = "SELECT payload FROM preflight_reports"
+        params: list = []
+        clauses = []
+        if commodity is not None:
+            clauses.append("commodity = ?")
+            params.append(commodity)
+        if market is not None:
+            clauses.append("market = ?")
+            params.append(market)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY commodity, market, report_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            PreflightReport.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
         ]
 
     def close(self) -> None:

@@ -16,7 +16,11 @@ One workflow every surface shares:
   turns the registry into EventAdjustments (the pack's path rule,
   the pack's interval widening) for the events whose effect
   touches a run's forecast window. Events outside the window
-  contribute nothing and are not attached.
+  contribute nothing and are not attached. When the console's
+  triage hook is wired (R13), events triage has retired or
+  superseded are excluded as well — a withdrawn declaration
+  feeds no new run, and an amended event's replacement is the
+  declaration the registry feeds.
 - ``verify_event`` runs the measurement layer: the claimed
   transmission against the seasonally-matched measured effect.
   An event whose claim disagrees is flagged ``unverified`` on its
@@ -78,6 +82,11 @@ class EventService:
     def __init__(self, store, pack: EventPack | None = None):
         self.store = store
         self.pack = pack or load_event_pack()
+        # Wired by the API composition (R13): a callable returning
+        # the event ids triage has retired or superseded, excluded
+        # from new runs. Unwired, the registry feeds every declared
+        # event exactly as before.
+        self.triage_exclusions = None
 
     # -- the analyst act ------------------------------------------------
     def register_event(
@@ -334,8 +343,13 @@ class EventService:
         part of the run's record.
         """
         first_day = as_of + timedelta(days=1)
+        excluded = (
+            self.triage_exclusions() if self.triage_exclusions is not None else set()
+        )
         adjustments: list[EventAdjustment] = []
         for event in self.store.list_market_events(commodity):
+            if event.event_id in excluded:
+                continue
             path = build_event_path(event, first_day, FORECAST_DAYS, self.pack)
             if path_touches(path):
                 adjustments.append(

@@ -757,7 +757,19 @@ def run_engine(
 
 
 def forecast_content_id(forecast: Forecast) -> str:
-    """The content address: a hash over everything except id/status."""
+    """The content address: a hash over everything except id/status.
+
+    The pre-flight pin (R13) is part of the address when it is
+    present — a pinned run is a different artefact from the
+    same estimation unpinned. When it is absent it is left out
+    of the payload entirely, so an unpinned forecast keeps the
+    address it had before the pin existed: addresses are
+    referenced across the record (boards, forks, approvals),
+    and an additive optional field must not silently
+    re-address the whole history.
+    """
     payload = forecast.model_dump(mode="json", exclude={"forecast_id", "status"})
+    if payload.get("preflight") is None:
+        payload.pop("preflight", None)
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return "FCST-" + hashlib.sha256(canonical.encode()).hexdigest()[:12]

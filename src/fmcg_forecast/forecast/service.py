@@ -29,6 +29,16 @@ Every surface (API, CLI/demo) shares this service. Its rules:
   event lands on the artefact as its own named line, with the
   pack's interval widening. Unwired — or with an empty registry —
   the events slot stays exactly as it was.
+- two R13 gates stand on the lifecycle: a forecast a rejection
+  act stands against (F20-OW2) can never be approved — the
+  check reads the act record directly, on every surface — and
+  when an approval guard is wired (the console's triage gate,
+  F20-OW3), approval is refused while the guard names a
+  blocker, so an event that is not officially clear cannot
+  enter the official view through any surface. A run may also
+  pin a coverage pre-flight (F20-OW4): the checklist's named
+  gaps then ride on the artefact as part of its content
+  address.
 """
 
 from __future__ import annotations
@@ -56,6 +66,7 @@ from fmcg_forecast.forecast.models import (
     Forecast,
     ForecastApproval,
     HorizonAccuracy,
+    PreflightPin,
 )
 from fmcg_forecast.forecast.verify import verify_forecast
 from fmcg_forecast.modelport import ModelPort
@@ -104,12 +115,14 @@ class ForecastService:
         sentiment_provider: Callable[[str, date], SentimentInput | None] | None = None,
         sentiment_claim_verifier: Callable[[str, Forecast], list[str]] | None = None,
         events_provider: Callable[[str, date], list[EventAdjustment]] | None = None,
+        approval_guard: Callable[[Forecast], list[str]] | None = None,
     ):
         self.store = store
         self.model = model
         self.sentiment_provider = sentiment_provider
         self.sentiment_claim_verifier = sentiment_claim_verifier
         self.events_provider = events_provider
+        self.approval_guard = approval_guard
 
     # -- runs ---------------------------------------------------------
     def run_forecast(
@@ -120,6 +133,7 @@ class ForecastService:
         *,
         via_backtest: bool = False,
         event_adjustments: list[EventAdjustment] | tuple[EventAdjustment, ...] = (),
+        preflight_id: str | None = None,
     ) -> Forecast:
         manifest = self.store.get_manifest()
         if manifest is None:
@@ -144,10 +158,47 @@ class ForecastService:
             sentiment_input=sentiment_input,
         )
         forecast = self._attach_accuracy(forecast)
+        if preflight_id is not None:
+            forecast = self._pin_preflight(forecast, preflight_id)
         existing = self.store.get_forecast(forecast.forecast_id)
         if existing is not None:
             return existing
         self.store.insert_forecast(forecast)
+        return forecast
+
+    def _pin_preflight(self, forecast: Forecast, preflight_id: str) -> Forecast:
+        """Pin a coverage pre-flight's named gaps on the run (R13).
+
+        The checklist must have been struck for this run's own
+        series and as-of — a pre-flight is a judgement about a
+        moment, and pinning another moment's gaps would put the
+        wrong record on the artefact. The pin joins the content
+        address, like the accuracy attachment.
+        """
+        report = self.store.get_preflight_report(preflight_id)
+        if report is None:
+            raise ForecastError(
+                f"unknown preflight report {preflight_id} — strike "
+                "the checklist before pinning it to a run"
+            )
+        if (report.commodity, report.market, report.as_of) != (
+            forecast.commodity,
+            forecast.market,
+            forecast.as_of,
+        ):
+            raise ForecastError(
+                f"preflight {preflight_id} was struck for "
+                f"{report.commodity}/{report.market} at "
+                f"{report.as_of.isoformat()} — it cannot be pinned "
+                f"to a run for {forecast.commodity}/{forecast.market} "
+                f"at {forecast.as_of.isoformat()}"
+            )
+        forecast.preflight = PreflightPin(
+            preflight_id=report.report_id,
+            pack_version=report.pack_version,
+            gaps=list(report.gaps),
+        )
+        forecast.forecast_id = forecast_content_id(forecast)
         return forecast
 
     def _attach_accuracy(self, forecast: Forecast) -> Forecast:
@@ -349,6 +400,21 @@ class ForecastService:
                 f"forecast {forecast_id} is already the official view; "
                 "approving it again would rewrite the record of the act"
             )
+        rejection = self.store.get_forecast_rejection(forecast_id)
+        if rejection is not None:
+            raise ApprovalStateError(
+                f"forecast {forecast_id} was rejected by "
+                f"{rejection.rejected_by} on "
+                f"{rejection.decided_on.isoformat()} "
+                f"({rejection.reason}) — a rejected forecast cannot "
+                "be approved; a new run is required"
+            )
+        if self.approval_guard is not None:
+            blockers = self.approval_guard(forecast)
+            if blockers:
+                raise ApprovalStateError(
+                    "approval refused: " + "; ".join(blockers)
+                )
         approver = _require_named(approver, "approver")
         role = _require_named(role, "role")
         approval_id = "APPR-" + hashlib.sha256(

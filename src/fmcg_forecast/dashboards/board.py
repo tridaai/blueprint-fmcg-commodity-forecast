@@ -87,9 +87,15 @@ def build_board(
         )
 
     # -- pending human gates ---------------------------------------
+    # A draft a rejection act stands against (R13) is not pending:
+    # it has been reviewed and sent back, and the desk's remedy is
+    # a new run — the review queue carries it as a closed record,
+    # not this inbox.
     pending: list[BoardRow] = []
     for forecast in store.list_forecasts():
         if forecast.status != "draft":
+            continue
+        if store.get_forecast_rejection(forecast.forecast_id) is not None:
             continue
         display, in_catalogue = _display_for(forecast.commodity)
         figures = {"accuracy_state": (

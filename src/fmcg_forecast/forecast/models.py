@@ -196,6 +196,27 @@ class AccuracyAttachment(BaseModel):
     )
 
 
+class PreflightPin(BaseModel):
+    """The coverage pre-flight a run pinned (R13, F20-OW4).
+
+    The run-anyway path, on the record: the checklist's named
+    gaps ride on the artefact verbatim, beside the forecast's
+    own missing-driver list, so a number struck over thin
+    evidence carries the evidence's gaps wherever it is read.
+    The pin is part of the content address — a run over the
+    same estimation with a different checklist is a different
+    artefact.
+    """
+
+    preflight_id: str = Field(description="The pre-flight report pinned")
+    pack_version: str = Field(description="Console pack the report was struck under")
+    gaps: list[str] = Field(
+        description="The report's named gaps, verbatim — the "
+        "console verifier checks they are exactly the pinned "
+        "report's list"
+    )
+
+
 class Forecast(BaseModel):
     forecast_id: str
     commodity: str
@@ -218,6 +239,13 @@ class Forecast(BaseModel):
         "(Law 2, R3). Attached by the forecast service on the run "
         "path; raw engine runs carry None — the engine estimates, "
         "the service judges.",
+    )
+    preflight: PreflightPin | None = Field(
+        default=None,
+        description="The coverage pre-flight pinned at run time "
+        "(R13, F20-OW4), when the run was struck under one. "
+        "Attached by the forecast service on the run path; "
+        "unpinned runs carry None.",
     )
 
 
