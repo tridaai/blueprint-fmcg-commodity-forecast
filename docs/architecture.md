@@ -299,6 +299,29 @@ LangGraph state machine whose transitions are stored artefacts:
   older report's re-performance names the drift and a
   rebuild strikes the current record — nothing is edited
   in place.
+- **operator console** (R13, landed): the desk day as
+  governed acts over the same artefacts (F20-OW2 +
+  F20-OW3 + F20-OW4 + F20-MF2). A versioned console pack
+  states the freshness windows, the queue order, the
+  rejection vocabulary, the triage acts and the gate and
+  pin rules. Rejection is an insert-only act checked
+  inside the approval act itself, so a rejected draft
+  cannot be approved through any surface. Event triage
+  folds named acts (confirm / amend / retire) over the
+  registry's measured verdicts — the verdict is never
+  edited; an event is officially clear only when it is
+  measured-verified or confirmed, and approval consults
+  that gate for every event a draft applied, naming the
+  blockers. Retired and superseded events are excluded
+  from new runs through the events layer's own adjustment
+  path; standing drafts keep their original lines. The
+  coverage pre-flight is a struck, re-performable
+  checklist over the raw record whose gap list a run can
+  pin into its own content address. The desktop and
+  phone pages render one composed view of stored
+  artefacts, and the phone's single action door dispatches
+  to the same service methods as the canonical endpoints
+  — parity is an equality of artefacts, graded.
 
 ## Failure posture
 

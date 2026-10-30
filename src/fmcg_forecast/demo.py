@@ -705,6 +705,108 @@ def main() -> int:
           f"days against {_tariff30.rest_mape}% outside it")
     print(f"  re-performance of the whole report: "
           f"{len(verify_report(store, ops))} problems")
+
+    print("\n--- operator console (R13, F20-OW2 + F20-OW3 + F20-OW4 + F20-MF2): the desk day, walked ---")
+    from fmcg_forecast.console.render import render_console_phone
+    from fmcg_forecast.console.service import ConsoleService
+    from fmcg_forecast.console.verify import verify_console
+    from fmcg_forecast.events.service import EventService
+    from fmcg_forecast.forecast.service import (
+        ApprovalStateError,
+        ForecastService,
+    )
+    from fmcg_forecast.modelport import OfflineModel
+
+    desk_events = EventService(store)
+    desk_console = ConsoleService(store, desk_events)
+    desk_events.triage_exclusions = desk_console.excluded_event_ids
+    desk = ForecastService(
+        store,
+        OfflineModel(),
+        events_provider=desk_events.forecast_adjustments,
+        approval_guard=desk_console.approval_blockers,
+    )
+
+    preflight = desk_console.strike_preflight("coffee", "bengaluru")
+    print(f"  pre-flight, coffee/bengaluru at {preflight.as_of}: "
+          f"{preflight.state} — {len(preflight.gaps)} named gap(s) "
+          f"ride on the report {preflight.report_id}")
+    for _gap in preflight.gaps:
+        print(f"    - {_gap}")
+    pinned = desk.run_forecast(
+        "coffee", "bengaluru", preflight_id=preflight.report_id
+    )
+    print(f"  the desk runs anyway: {pinned.forecast_id} pins the "
+          f"checklist verbatim — the gaps are on the artefact, "
+          f"not in a side channel")
+
+    forged = desk_events.register_event(
+        event_class="tariff_change",
+        commodity="soybean",
+        window_start=date(2025, 6, 15),
+        window_end=date(2025, 7, 15),
+        channel="import_flow",
+        peak_log_price_effect=0.60,
+        basis="desk_estimate",
+        basis_detail="A desk estimate of the tariff's pass-through",
+        decay_days=10,
+        description="A claimed tariff step on oilseed imports",
+        declared_by="a.sharma",
+        declared_on=date(2025, 6, 10),
+    )
+    print(f"  a desk declaration claims +0.60 log over the real "
+          f"tariff window; measured transmission grades it "
+          f"'{desk_events.verify_event(forged.event_id).status}'")
+    draft = desk.run_forecast("soybean", "indore", as_of=date(2025, 5, 31))
+    print(f"  the claim still contributes to the draft "
+          f"{draft.forecast_id} — labelled, at its stated amount")
+    try:
+        desk.approve(
+            draft.forecast_id, "d.kaur", "desk_head", date(2025, 6, 2)
+        )
+        print("  ERROR: an unverified event reached the official view")
+    except ApprovalStateError as exc:
+        print(f"  approval refused: {exc}")
+    cleared = 0
+    for _applied in draft.method.events_applied:
+        if any(
+            _applied in b
+            for b in desk_console.approval_blockers(draft)
+        ):
+            desk_console.confirm_event(
+                _applied, "a.sharma", "analyst", date(2025, 6, 2),
+                "worked through the triage queue at the desk",
+            )
+            cleared += 1
+    desk.approve(draft.forecast_id, "d.kaur", "desk_head", date(2025, 6, 2))
+    print(f"  the desk works the triage queue ({cleared} confirm "
+          f"act(s) struck by a named analyst); the same draft now "
+          f"approves — the official view was earned, not assumed")
+
+    stale = desk.run_forecast(
+        "wheat", "delhi_khari_baoli", as_of=date(2025, 12, 20)
+    )
+    desk_console.reject_forecast(
+        stale.forecast_id, "d.kaur", "desk_head", date(2026, 1, 3),
+        "stale_inputs", "arrivals feed a week old at the run",
+    )
+    try:
+        desk.approve(
+            stale.forecast_id, "d.kaur", "desk_head", date(2026, 1, 4)
+        )
+        print("  ERROR: a rejected draft was approved")
+    except ApprovalStateError as exc:
+        print(f"  rejection is an act, not a label: {exc}")
+
+    view = desk_console.console_view()
+    phone = render_console_phone(view)
+    print(f"  console: {len(view['review_queue']['rows'])} "
+          f"draft(s) in the review queue, "
+          f"{len(view['triage_queue']['rows'])} event(s) in "
+          f"triage, {len(view['preflights'])} live pre-flights, "
+          f"the phone page renders the same record in "
+          f"{len(phone)} bytes; the whole console re-performs "
+          f"with {len(verify_console(store))} problems")
     print(f"sealed truth rows stored: {truth_store.count()} (readable only via the truth store)")
     return 0
 

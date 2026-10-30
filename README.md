@@ -812,6 +812,98 @@ stays on record, flagged, never edited. Transmission
 aggregates over one event are anecdote by the pack's own
 rule, and the report refuses to dress them as more.
 
+## What Round 13 adds
+
+The operator console (F20-OW2 + F20-OW3 + F20-OW4 +
+F20-MF2 on the roadmap) — the desk day in one place, under
+a versioned **console pack** (v2026.10.1: the freshness
+windows, the queue order, the rejection-reason
+vocabulary, the triage acts and the gate and pin rules —
+all stated as data). Every console artefact is
+content-addressed and insert-only, and the whole console
+re-performs: a tampered rejection, triage act or
+pre-flight is flagged, never passed silently.
+
+- **The forecast review queue (F20-OW2)** — every draft
+  forecast on the desk in the pack's stated order —
+  degraded accuracy first, then unmeasured, then measured
+  — each row carrying its per-horizon accuracy states,
+  factor contributions, the prior official for the series
+  with the 30-day P50 difference against it, and its
+  approval blockers on its face. **Rejection is a named
+  act**, sibling to approval: a named desk head, a reason
+  from the pack's vocabulary (`other_stated_reason`
+  requires the reason spelled out), one rejection per
+  draft, idempotent on an identical act. A rejected draft
+  leaves the queue and can never be approved afterwards —
+  the check lives inside the approval act itself, so no
+  surface can reopen it; the desk's remedy is a new run.
+- **The event triage queue (F20-OW3)** — every declared
+  event whose transmission is unverified or not yet
+  measurable, plus verified events an analyst has acted
+  on, worked through three named acts: **confirm** (a
+  named analyst accepts the basis; the event may then
+  stand behind official forecasts), **retire** (withdrawn
+  — excluded from new runs altogether, and a blocker on
+  drafts that already applied it), **amend** (the event is
+  superseded by a corrected declaration, recorded by
+  link; restating the identical declaration is refused).
+  Until an event is officially clear — measured-verified
+  or confirmed — it still contributes to draft forecasts
+  at its stated amount, labelled on every read, and it
+  contributes **zero to the official view**: approval of
+  any draft applying it is refused, naming the event.
+  The fold of acts is the state; a later confirm revives
+  a retired event.
+- **The coverage pre-flight (F20-OW4)** — before a run,
+  a struck checklist over the raw record: every catalogue
+  driver's state (present / stale / missing, with its
+  last-observation date and age), the sentiment freshness,
+  and the backtest coverage per horizon — and the gap
+  list, every gap a named sentence ("Coffee does not
+  report it" for a catalogue gap, a different sentence
+  for never-reported). A degraded-accuracy horizon is
+  coverage, not a gap. Running anyway is one deliberate
+  act: the run **pins the checklist** — report id, pack
+  version and the gap list verbatim ride inside the
+  forecast artefact's own content address — and a pin
+  naming another series, another as-of or an unknown
+  report is refused.
+- **The responsive exception console (F20-MF2)** — the
+  morning board, review queue, triage queue, open alerts
+  and live pre-flights composed into one read at
+  `/console` (HTML at `/console/html`), and a phone page
+  at `/console/phone` whose inline forms post to a single
+  action door. Parity is graded, not asserted: the same
+  act struck through the phone's door and through the
+  canonical endpoint is the **identical artefact**, byte
+  for byte, on twin stores — over HTTP in the tests and
+  at service level in the eval gate.
+- **Surfaces** — migration 0013 (both dialects);
+  `POST /forecasts/{id}/reject`,
+  `GET /forecasts/{id}/rejection`, the enriched
+  `GET /forecasts/{id}/events` (per-event verdict and
+  triage state plus the draft's official blockers),
+  `GET /console/pack`, `POST/GET /console/preflights`
+  (+ `/{id}`, `/{id}/verify`), `GET /console/review-queue`,
+  `GET /console/triage-queue`,
+  `GET/POST /market-events/{id}/triage[/confirm|retire|amend]`,
+  `GET /console`, `/console/html`, `/console/phone`,
+  `POST /console/actions`, `GET /console/verify`; the
+  `fmcg-agent-console` CLI. The demo walks a full desk
+  day: pre-flight, a pinned run, a refused approval, the
+  triage clear, a rejection.
+
+Honest positions, stated plainly: triage confirm is a
+human act with a name on it — the console never upgrades
+an event's measured verdict, and the measured verdict
+stays on the event's face next to the confirm. A retired
+event's drafts keep their original event lines (history
+is not rewritten); the retirement blocks their approval
+and removes the event from new runs. The phone page is a
+rendering of the same composed view as the desktop page —
+no second record, no phone-only state.
+
 ## Honest status
 
 - **Built and gated in R1:** the spine, generator + manifest, store port +
@@ -980,8 +1072,29 @@ rule, and the report refuses to dress them as more.
   re-measurement and shock-window re-splitting; the
   truth-isolation scan now covers the analytics package
   too.
-- **Not yet built:** the console (R13). The round map runs to
-  R20 and continues past it until the production bar is met.
+- **Built and gated in R13:** the console pack (freshness
+  windows, queue order, rejection vocabulary, triage acts,
+  the gate and pin rules — versioned data), the review
+  queue with rejection as a named act inside the approval
+  path (a rejected draft can never be approved), the event
+  triage queue gating the official view (unverified events
+  contribute to drafts, labelled, and zero to official
+  forecasts until a named analyst confirms them; retired
+  and superseded events leave new runs), the coverage
+  pre-flight with run-anyway pinning (gap list verbatim in
+  the forecast's content address), the desktop and phone
+  consoles with action parity graded byte-for-byte,
+  migration 0013, the console API surface, the
+  `fmcg-agent-console` CLI and the demo walk. Eval gate
+  v12 adds zero-tolerance counters for pre-flight
+  re-derivation from the raw record (tamper included),
+  queue order and prior-official arithmetic, rejection
+  finality, the triage gate in both directions and phone
+  action parity; the truth-isolation scan now covers the
+  console package too.
+- **Not yet built:** R14 onward on the round map (F20-PO4
+  and F20-GS next). The round map runs to R20 and
+  continues past it until the production bar is met.
 - **The dataset in this repo is generated in-repo for the blueprint** — gold
   by construction, so the engine can be graded against a known future.
 - **Live models are stub-tested until configured:** hosted profiles fail
