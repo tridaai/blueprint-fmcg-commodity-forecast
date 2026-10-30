@@ -273,6 +273,32 @@ LangGraph state machine whose transitions are stored artefacts:
   independently, and ingestion never touches a pending
   intake entry: the maker–checker gate and the connector
   path stay separate doors into the same store.
+- **forecast-ops analytics** (R12, landed): the desk's
+  track record as one re-performable artefact (F20-AM1).
+  A versioned analytics pack states the trend windows and
+  epsilon, the signal-outcome rule, the minimum class
+  sample and the shock-window rule. Trends pool stored
+  backtest results early-against-late by the ledger's own
+  pooling, with the ledger record riding beside the trend
+  and too-few-origins series named insufficient. Signal
+  outcomes are struck at the accuracy grid's origins from
+  raw engine runs carrying as-of accuracy attachments
+  (earlier origins only — no outcome is judged with
+  knowledge its origin lacked) and measured against the
+  realised prices that followed; desk signals whose
+  horizons have not landed are pending, named, never
+  graded. Transmission error aggregates the events
+  layer's own seasonally-matched measurements per class,
+  with sample counts on the face and small samples named
+  anecdote. Shock windows split each series × horizon's
+  stored scored days at the event window plus its decay
+  tail and re-derive both pools by the backtest metrics'
+  own day formulas; an event the grid never graded is
+  named, never absent. The report is struck from the
+  artefact set at build time: when the set moves on, the
+  older report's re-performance names the drift and a
+  rebuild strikes the current record — nothing is edited
+  in place.
 
 ## Failure posture
 

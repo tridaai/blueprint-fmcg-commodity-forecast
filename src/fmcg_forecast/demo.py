@@ -649,6 +649,62 @@ def main() -> int:
           f"{len(ingest.verify_all())} problems; the replay "
           f"artefact re-performs with "
           f"{len(verify_replay(store, replay))} problems")
+
+    print("\n--- forecast-ops analytics (R12, F20-AM1): the desk's track record, measured ---")
+    from fmcg_forecast.analytics.service import AnalyticsService
+    from fmcg_forecast.analytics.verify import verify_report
+
+    analytics = AnalyticsService(store)
+    ops = analytics.build_report()
+    print(f"  ops report {ops.report_id} (analytics pack "
+          f"{ops.analytics_pack_version}) over "
+          f"{ops.n_backtest_results} stored backtest results")
+    _directions = {}
+    for _row in ops.trends:
+        _directions[_row.direction] = _directions.get(_row.direction, 0) + 1
+    print(f"  accuracy trends over {len(ops.trends)} series x "
+          f"horizons: " + ", ".join(
+              f"{name} {count}" for name, count in sorted(_directions.items())
+          ))
+    _coffee = next(
+        r for r in ops.trends
+        if r.commodity == "coffee" and r.horizon_days == 30
+    )
+    print(f"  coffee's 30-day trend reads "
+          f"{_coffee.direction} — {_coffee.reason}")
+    _graded = [r for r in ops.signal_outcomes if r.state == "graded"]
+    _pending = [r for r in ops.signal_outcomes if r.state == "pending"]
+    _fav = sum(1 for r in _graded if r.favourable)
+    _buys = [r for r in _graded if r.value == "buy_now"]
+    _buys_fav = sum(1 for r in _buys if r.favourable)
+    print(f"  signal outcomes: {len(_graded)} graded from the "
+          f"backtest grid's origins ({_fav} favourable), "
+          f"{len(_pending)} desk signal(s) pending — their "
+          f"horizons land past the last observed day and are "
+          f"named, never graded; buy_now calls: "
+          f"{len(_buys)}, favourable {_buys_fav}")
+    for _row in ops.transmission:
+        if _row.n_events:
+            print(f"  transmission {_row.event_class}: "
+                  f"{_row.n_measurable} measurable of "
+                  f"{_row.n_events} registered, mean signed "
+                  f"error {_row.mean_signed_error} log — "
+                  f"{_row.sample_state}")
+    _shock_graded = [r for r in ops.shock_windows if r.state == "graded"]
+    _shock_named = [r for r in ops.shock_windows if r.state != "graded"]
+    _tariff30 = next(
+        r for r in _shock_graded
+        if r.event_class == "tariff_change" and r.horizon_days == 30
+        and r.market == "indore"
+    )
+    print(f"  shock windows: {len(_shock_graded)} graded, "
+          f"{len(_shock_named)} named ungraded (the 2024 export "
+          f"ban never falls inside a scored window); the "
+          f"tariff's 30-day shock pool at Indore pools to MAPE "
+          f"{_tariff30.shock_mape}% over {_tariff30.shock_n_days} "
+          f"days against {_tariff30.rest_mape}% outside it")
+    print(f"  re-performance of the whole report: "
+          f"{len(verify_report(store, ops))} problems")
     print(f"sealed truth rows stored: {truth_store.count()} (readable only via the truth store)")
     return 0
 

@@ -735,6 +735,83 @@ makes the fold auditable. Backfill replay computes real
 backtests — it is priced in engine runs, and the replay
 artefact says plainly which origins were skipped and why.
 
+## What Round 12 adds
+
+Forecast quality & ops analytics (F20-AM1 on the roadmap)
+with the planted-shock grading depth the round map pairs
+with it — the desk learns which parts of the system to
+trust, measured from the artefacts of record rather than
+asserted about them.
+
+- **The ops report** — one content-addressed, insert-only
+  artefact under a versioned **analytics pack** (v2026.10.1:
+  the trend windows and epsilon, the outcome rule, the
+  minimum class sample, the shock-window rule — all stated
+  as data), naming the accuracy, signal and event pack
+  versions its inputs were struck under. Four sections,
+  every figure re-performed field for field by the
+  verifier; one mismatch refuses the report.
+- **Accuracy trends** — per series × horizon, the first
+  three stored backtest results pooled against the last
+  three by the accuracy ledger's own pooling (error sums
+  pooled, metrics derived, day-weighted — never a mean of
+  means), judged improving / steady / worsening against
+  the pack's epsilon, with the ledger record of record
+  riding beside the trend. A series with too few origins
+  to tell early from late is named **insufficient** —
+  coffee, with five strikable origins, is exactly that,
+  on all three horizons.
+- **Signal outcomes, measured** — the signal the desk
+  would have seen is struck at every accuracy-grid origin
+  (a raw engine run, the harness's basis) carrying the
+  accuracy attachment pooled from **earlier origins only**,
+  so no call is judged with knowledge its origin did not
+  have; each is then graded against the last observed
+  price inside its horizon: realised drift, drift error
+  against the signal's own prediction, the move against
+  the signal pack's own bars, and a favourable verdict
+  under the pack's stated per-call rule. On the generated
+  dataset: 135 origin signals graded, 126 favourable —
+  and the five coffee origins the engine refuses are
+  named as skips, never dropped. Desk signals whose
+  horizons have not landed in observed history are
+  **pending**: named with the reason, never graded.
+- **Transmission error by event class** — every
+  registered event re-measured by the events layer's
+  seasonally-matched measurement and aggregated per
+  class: mean signed error, mean absolute error, mean
+  ratio to claim, verified/unverified counts, sample
+  counts on the face. Each planted class (tariff,
+  export restriction, weather shock) has exactly one
+  measurable event — verified, and named a **small
+  sample** against the pack's minimum of three: printed,
+  and read as anecdote, not evidence. Classes with no
+  registered events are named too.
+- **Shock-window grades** — per event × market ×
+  horizon, the stored scored days are split at the
+  event's window plus its decay tail and both pools are
+  re-derived by the backtest metrics' own day formulas:
+  the tariff and the drought grade against their
+  outside-window rests, while the 2024 export ban —
+  over before the grid's first origin — is named
+  **no shock-window days** on every row rather than
+  silently absent or, worse, graded.
+- **Surfaces** — migration 0012 (both dialects); `GET
+  /analytics/pack`, `POST /analytics/reports`, `GET
+  /analytics/reports` + `/{id}` + `/{id}/verify`; the
+  `fmcg-agent-analytics` CLI. The demo builds the report
+  over the planted book and prints its sections.
+
+Honest positions, stated plainly: a report is struck from
+the artefact set standing at build time. When the set
+moves on — a backfilled origin, a newly struck signal, a
+newly declared event — the older report's re-performance
+names the drift rather than passing silently, and a
+rebuild strikes the current record; the superseded report
+stays on record, flagged, never edited. Transmission
+aggregates over one event are anecdote by the pack's own
+rule, and the report refuses to dress them as more.
+
 ## Honest status
 
 - **Built and gated in R1:** the spine, generator + manifest, store port +
@@ -884,6 +961,25 @@ artefact says plainly which origins were skipped and why.
   provenance, replay idempotence, refusals, correction
   folds and backfill; the truth-isolation scan now covers
   the ingest package too.
+- **Built and gated in R12:** the analytics pack (trend
+  windows and epsilon, the outcome rule, the minimum class
+  sample, the shock-window rule — versioned data), the ops
+  report (accuracy trends pooled by the ledger's own rule
+  with insufficient history named on coffee; signal
+  outcomes struck at grid origins with as-of attachments
+  and measured against realised prices, pending desk
+  signals named never graded; transmission error per event
+  class with small samples named as anecdote; shock-window
+  grades split at the planted windows, the 2024 ban named
+  ungraded), the whole-report re-performance verifier,
+  migration 0012, the analytics API surface, the
+  `fmcg-agent-analytics` CLI and the demo walk. Eval gate
+  v11 adds zero-tolerance counters for report
+  re-performance (tamper included), trend recomputation,
+  signal-outcome re-measurement, transmission
+  re-measurement and shock-window re-splitting; the
+  truth-isolation scan now covers the analytics package
+  too.
 - **Not yet built:** the console (R13). The round map runs to
   R20 and continues past it until the production bar is met.
 - **The dataset in this repo is generated in-repo for the blueprint** — gold
@@ -1025,7 +1121,20 @@ src/fmcg_forecast/
     verify.py      batch, correction, provenance, replay
                    re-performance
     cli.py         the fmcg-agent-ingest command line
-migrations/        0001-0011 SQL, sqlite + postgres dialects
+  analytics/       the forecast-ops analytics package
+                   (truth-isolated, R12):
+    pack.py        the analytics pack: trend windows +
+                   epsilon, outcome rule, minimum class
+                   sample, shock-window rule
+    models.py      trend / signal outcome / transmission /
+                   shock-window rows and the ops report
+    engine.py      trends, outcomes, transmission error,
+                   shock pools — in code, from artefacts
+    verify.py      whole-report re-performance + the
+                   honesty invariants, named
+    service.py     build / read / verify — one workflow
+    cli.py         the fmcg-agent-analytics command line
+migrations/        0001-0012 SQL, sqlite + postgres dialects
 scripts/           demo.py, local_harness.py, prod_smoke.py
 evals/             the eval gate
 docs/              architecture.md
