@@ -53,6 +53,7 @@ from fmcg_forecast.ingest.models import (
     QuarantineRecord,
     SourceRegistration,
 )
+from fmcg_forecast.analytics.models import OpsReport
 from fmcg_forecast.intake.models import IntakeCheckAct, IntakeEntry
 from fmcg_forecast.signals.models import BuySignal
 from fmcg_forecast.thin.models import ThinAssessment
@@ -279,6 +280,9 @@ class Store(Protocol):
     def list_backfill_replays(
         self, commodity: str | None = None, market: str | None = None
     ) -> list[BackfillReplay]: ...
+    def insert_ops_report(self, report: OpsReport) -> None: ...
+    def get_ops_report(self, report_id: str) -> OpsReport | None: ...
+    def list_ops_reports(self) -> list[OpsReport]: ...
     def close(self) -> None: ...
 
 
@@ -2040,6 +2044,44 @@ class SqlStore:
         return [
             BackfillReplay.model_validate(json.loads(r[0]))
             for r in cur.fetchall()
+        ]
+
+    # -- forecast-ops analytics reports (R12) --------------------------
+    # Insert-only payload table in the standing idiom: the
+    # service checks the content address before inserting, so
+    # re-building the same store state is a no-op rather than
+    # a duplicate-write error.
+
+    def insert_ops_report(self, report: OpsReport) -> None:
+        sql = self._q(
+            "INSERT INTO ops_reports (report_id, "
+            "analytics_pack_version, payload) VALUES (?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                report.report_id,
+                report.analytics_pack_version,
+                report.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_ops_report(self, report_id: str) -> OpsReport | None:
+        cur = self._conn.execute(
+            self._q("SELECT payload FROM ops_reports WHERE report_id = ?"),
+            (report_id,),
+        )
+        row = cur.fetchone()
+        return OpsReport.model_validate(json.loads(row[0])) if row else None
+
+    def list_ops_reports(self) -> list[OpsReport]:
+        cur = self._conn.execute(
+            self._q("SELECT payload FROM ops_reports ORDER BY report_id")
+        )
+        return [
+            OpsReport.model_validate(json.loads(r[0])) for r in cur.fetchall()
         ]
 
     def close(self) -> None:
