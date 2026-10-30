@@ -16,7 +16,12 @@ before it serves:
   batch lands its clean rows, quarantines its bad row with
   the reason named, verifies, and its replay lands nothing
   twice — and the same delivery on a SQLite store produces
-  the identical batch artefact (dialect parity, gap 0).
+  the identical batch artefact (dialect parity, gap 0);
+- the R13 operator console works on this profile too: the
+  migration chain includes the console tables, and a struck
+  pre-flight and a rejection act on the Postgres store are
+  byte-identical to the same artefacts struck on a full
+  SQLite store over the same record (dialect parity, gap 0).
 
 Usage: DATABASE_URL=postgresql://... python scripts/prod_smoke.py
 Exits 0 when every check passes, 1 otherwise.
@@ -170,6 +175,75 @@ def main() -> int:
             if sqlite_reasons != reasons:
                 problems.append("dialect parity: quarantine reasons differ")
         print("dialect parity: batch artefact and quarantine "
+              "identical across profiles (gap 0)")
+
+        # --- R13: the operator console on this profile ----------------
+        from fmcg_forecast.console.service import ConsoleService
+        from fmcg_forecast.events.service import EventService
+        from fmcg_forecast.forecast.service import ForecastService
+        from fmcg_forecast.modelport import OfflineModel
+        from fmcg_forecast.sentiment.grading import (
+            build_sentiment_grading_store,
+        )
+        from fmcg_forecast.sentiment.load import load_sentiment_corpus
+        from fmcg_forecast.sentiment.service import SentimentService
+
+        EventService(store).seed_historical(store.get_manifest())
+        grading = build_sentiment_grading_store(database_url=url)
+        load_sentiment_corpus(store, grading, data.manifest.seed)
+        SentimentService(store, OfflineModel()).run_pipeline()
+        pg_console = ConsoleService(store, EventService(store))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            lite_db = str(Path(tmp) / "console-parity.db")
+            lite = build_store(lite_db)
+            lite_truth = build_truth_store(lite_db)
+            load_dataset(lite, lite_truth, data.manifest.seed)
+            run_all(lite)
+            EventService(lite).seed_historical(lite.get_manifest())
+            lite_grading = build_sentiment_grading_store(lite_db)
+            load_sentiment_corpus(lite, lite_grading, data.manifest.seed)
+            SentimentService(lite, OfflineModel()).run_pipeline()
+            lite_console = ConsoleService(lite, EventService(lite))
+            for series in (("coffee", "bengaluru"),
+                           ("wheat", "delhi_khari_baoli")):
+                pg_report = pg_console.strike_preflight(*series)
+                lite_report = lite_console.strike_preflight(*series)
+                if pg_report.model_dump(mode="json") != (
+                    lite_report.model_dump(mode="json")
+                ):
+                    problems.append(
+                        f"console parity: the {series[0]} pre-flight "
+                        "differs across profiles"
+                    )
+            pg_draft = ForecastService(
+                store, OfflineModel()
+            ).run_forecast("soybean", "nagpur", as_of=date(2025, 10, 31))
+            lite_draft = ForecastService(
+                lite, OfflineModel()
+            ).run_forecast("soybean", "nagpur", as_of=date(2025, 10, 31))
+            if pg_draft.forecast_id != lite_draft.forecast_id:
+                problems.append(
+                    "console parity: the parity draft's id differs "
+                    "across profiles"
+                )
+            else:
+                pg_act = pg_console.reject_forecast(
+                    pg_draft.forecast_id, "d.kaur", "desk_head",
+                    date(2026, 1, 3), "stale_inputs",
+                )
+                lite_act = lite_console.reject_forecast(
+                    lite_draft.forecast_id, "d.kaur", "desk_head",
+                    date(2026, 1, 3), "stale_inputs",
+                )
+                if pg_act.model_dump(mode="json") != (
+                    lite_act.model_dump(mode="json")
+                ):
+                    problems.append(
+                        "console parity: the rejection act differs "
+                        "across profiles"
+                    )
+        print("console parity: pre-flights and the rejection act "
               "identical across profiles (gap 0)")
     finally:
         # The app under test holds its own store connection;

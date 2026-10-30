@@ -417,6 +417,143 @@ def main() -> int:
             },
         )
         checks.append(("re-adoption refused as a state error", r.status_code == 409))
+
+        # --- R13: operator console -------------------------------------
+        r = client.get(f"{BASE}/console/pack")
+        checks.append(
+            ("console pack served", r.status_code == 200 and r.json()["version"] == "2026.10.1")
+        )
+        r = client.post(
+            f"{BASE}/console/preflights",
+            json={"commodity": "coffee", "market": "bengaluru"},
+        )
+        preflight_body = r.json() if r.status_code == 201 else {}
+        checks.append(
+            (
+                "coffee pre-flight names the catalogue gaps",
+                r.status_code == 201
+                and preflight_body.get("state") == "gapped"
+                and any(
+                    "does not report it" in g
+                    for g in preflight_body.get("gaps", [])
+                )
+                and preflight_body.get("problems") == [],
+            )
+        )
+        r = client.post(
+            f"{BASE}/forecasts/run",
+            json={"commodity": "coffee", "market": "bengaluru",
+                  "preflight_id": preflight_body.get("report_id")},
+        )
+        checks.append(
+            (
+                "run-anyway pins the pre-flight gaps on the artefact",
+                r.status_code == 200
+                and r.json()["preflight"]["gaps"] == preflight_body.get("gaps"),
+            )
+        )
+        r = client.post(
+            f"{BASE}/forecasts/run",
+            json={"commodity": "cumin", "market": "unjha", "as_of": "2025-12-18"},
+        )
+        cumin_id = r.json()["forecast_id"] if r.status_code == 200 else None
+        r = client.post(
+            f"{BASE}/forecasts/{cumin_id}/reject",
+            json={"rejected_by": "d.kaur", "role": "desk_head",
+                  "decided_on": "2026-01-03", "reason": "stale_inputs"},
+        )
+        checks.append(
+            ("rejection act lands", r.status_code == 200 and r.json()["forecast_id"] == cumin_id)
+        )
+        r = client.post(
+            f"{BASE}/forecasts/{cumin_id}/approve",
+            json={"approver": "d.kaur", "role": "desk_head", "decided_on": "2026-01-04"},
+        )
+        checks.append(
+            ("a rejected draft cannot be approved", r.status_code == 409 and "rejected" in r.json()["detail"])
+        )
+        r = client.post(
+            f"{BASE}/market-events",
+            json={
+                "event_class": "tariff_change", "commodity": "soybean",
+                "window_start": "2025-06-15", "window_end": "2025-07-15",
+                "channel": "import_flow", "peak_log_price_effect": 0.60,
+                "basis": "desk_estimate",
+                "basis_detail": "A desk estimate, stated for the harness",
+                "decay_days": 10,
+                "description": "A claimed tariff step on oilseed imports",
+                "declared_by": "a.sharma", "declared_on": "2025-06-10",
+            },
+        )
+        forged_id = r.json()["event_id"] if r.status_code == 201 else None
+        checks.append(("forged declaration registered", r.status_code == 201))
+        r = client.post(
+            f"{BASE}/forecasts/run",
+            json={"commodity": "soybean", "market": "indore", "as_of": "2025-05-31"},
+        )
+        shocked13_id = r.json()["forecast_id"] if r.status_code == 200 else None
+        checks.append(
+            (
+                "the unverified claim still contributes to the draft",
+                r.status_code == 200 and forged_id in r.json()["method"]["events_applied"],
+            )
+        )
+        r = client.post(
+            f"{BASE}/forecasts/{shocked13_id}/approve",
+            json={"approver": "d.kaur", "role": "desk_head", "decided_on": "2025-06-02"},
+        )
+        checks.append(
+            ("triage gate refuses the approval", r.status_code == 409 and forged_id in r.json()["detail"])
+        )
+        r = client.post(
+            f"{BASE}/market-events/{forged_id}/triage/confirm",
+            json={"actor": "a.sharma", "role": "analyst",
+                  "acted_on": "2025-06-02", "note": "circular checked"},
+        )
+        checks.append(("triage confirm act lands", r.status_code == 200))
+        r = client.post(
+            f"{BASE}/forecasts/{shocked13_id}/approve",
+            json={"approver": "d.kaur", "role": "desk_head", "decided_on": "2025-06-02"},
+        )
+        checks.append(("approval stands after triage confirm", r.status_code == 200))
+        r = client.get(f"{BASE}/console")
+        checks.append(
+            ("console view composes clean", r.status_code == 200 and r.json()["problems"] == [])
+        )
+        r = client.get(f"{BASE}/console/html")
+        checks.append(("desktop console renders", r.status_code == 200 and "Operator console" in r.text))
+        r = client.get(f"{BASE}/console/phone")
+        checks.append(("phone console renders", r.status_code == 200 and "Desk inbox" in r.text))
+        r = client.post(
+            f"{BASE}/forecasts/run",
+            json={"commodity": "wheat", "market": "indore", "as_of": "2025-12-22"},
+        )
+        phone_draft_id = r.json()["forecast_id"] if r.status_code == 200 else None
+        r = client.post(
+            f"{BASE}/console/actions",
+            json={"kind": "approve_forecast", "forecast_id": phone_draft_id,
+                  "approver": "d.kaur", "role": "desk_head",
+                  "decided_on": "2026-01-05"},
+        )
+        checks.append(
+            (
+                "the phone's action door strikes the approval act",
+                r.status_code == 200 and r.json()["forecast_id"] == phone_draft_id,
+            )
+        )
+        r = client.get(f"{BASE}/console/review-queue")
+        checks.append(
+            (
+                "the phone-approved draft leaves the review queue",
+                r.status_code == 200
+                and phone_draft_id
+                not in [row["forecast_id"] for row in r.json()["rows"]],
+            )
+        )
+        r = client.get(f"{BASE}/console/verify")
+        checks.append(
+            ("console re-performs clean", r.status_code == 200 and r.json()["problems"] == [])
+        )
         for name, ok in checks:
             print(f"  {'PASS' if ok else 'FAIL'}  {name}")
         return 0 if all(ok for _, ok in checks) else 1

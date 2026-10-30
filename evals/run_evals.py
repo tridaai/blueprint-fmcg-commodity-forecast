@@ -293,6 +293,35 @@ shock grading), also zero-tolerance:
   days at the event's window, or the planted 2024 export
   ban — never inside a scored window — graded anywhere.
 
+Round 13 counters (operator console, F20-OW2 + F20-OW3 +
+F20-OW4 + F20-MF2), also zero-tolerance:
+
+- console_preflight_errors: a pre-flight line whose state,
+  age or gap sentence disagrees with an independent
+  recomputation from the raw series, a catalogue driver a
+  commodity does not report left unnamed on a series of
+  that commodity, or a tampered report the re-performance
+  verifier accepts.
+- console_review_queue_errors: a queue row whose accuracy
+  state disagrees with the forecast's pinned attachment,
+  rows out of the pack's stated order (degraded, then
+  unmeasured, then measured), a prior-official pin that is
+  not that series' standing official, or a stated 30-day
+  difference that is not the two artefacts' difference.
+- console_rejection_errors: a rejected draft that can be
+  approved afterwards by any path, stays in the review
+  queue, or accepts a second, different rejection act.
+- console_triage_errors: an unverified event that does not
+  block its drafts' approval, a blocker that names the
+  wrong event, a confirmed event that still blocks, a
+  retired event applied by a new run, a superseded event
+  applied instead of its replacement, or any problem the
+  console verifier reports over the eval's console record.
+- console_action_parity_errors: an act struck through the
+  console's action door (the phone's door) that differs in
+  any field from the same act struck through the canonical
+  service path on a twin store holding the same artefact.
+
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
 
@@ -334,6 +363,7 @@ def truth_isolation_violations() -> int:
         + list((base / "intake").rglob("*.py"))
         + list((base / "ingest").rglob("*.py"))
         + list((base / "analytics").rglob("*.py"))
+        + list((base / "console").rglob("*.py"))
     )
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -434,6 +464,11 @@ def main() -> int:
         "analytics_signal_outcome_errors": 0,
         "analytics_transmission_errors": 0,
         "analytics_shock_window_errors": 0,
+        "console_preflight_errors": 0,
+        "console_review_queue_errors": 0,
+        "console_rejection_errors": 0,
+        "console_triage_errors": 0,
+        "console_action_parity_errors": 0,
     }
 
     # --- planted events, measured seasonally-matched ---------------
@@ -2663,7 +2698,490 @@ def main() -> int:
     if not _verify_ops_report(store, store.get_ops_report(_ops.report_id)):
         counters["analytics_reperformance_errors"] += 1
 
-    print("Round 12 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio + R7 prompt-to-dashboard + R8 buy signals & coverage planning + R9 alerting, subscriptions & escalation + R10 thin-data depth & assisted intake + R11 production data plane + R12 forecast-ops analytics & shock grading)")
+    # --- operator console (R13, F20-OW2 + F20-OW3 + F20-OW4 + F20-MF2) ---
+    import json as _json13
+    import sqlite3 as _sqlite3_13
+    from datetime import date as _date13
+
+    from fmcg_forecast.catalogue import ALL_DRIVERS as _ALL_DRIVERS
+    from fmcg_forecast.console.engine import (
+        ConsoleStateError as _ConsoleStateError,
+    )
+    from fmcg_forecast.console.pack import (
+        load_console_pack as _load_console_pack,
+    )
+    from fmcg_forecast.console.service import (
+        ConsoleService as _ConsoleService,
+    )
+    from fmcg_forecast.console.verify import (
+        verify_console as _verify_console,
+    )
+    from fmcg_forecast.console.verify import (
+        verify_preflight as _verify_preflight,
+    )
+    from fmcg_forecast.events.service import (
+        EventService as _EventService13,
+    )
+    from fmcg_forecast.forecast.models import HORIZONS as _HORIZONS13
+    from fmcg_forecast.forecast.service import (
+        ApprovalStateError as _ApprovalStateError,
+    )
+    from fmcg_forecast.forecast.service import (
+        ForecastService as _ForecastService13,
+    )
+    from fmcg_forecast.modelport import OfflineModel as _OfflineModel13
+
+    _events13 = _EventService13(store)
+    _console13 = _ConsoleService(store, _events13)
+    _cpack = _load_console_pack()
+    _hend = manifest.history_end
+    _plain13 = _ForecastService13(store, _OfflineModel13())
+
+    # pre-flight: every series' checklist re-derived from the
+    # raw record — last observations, index weeks, ledger pins
+    for _spec in BY_NAME.values():
+        for _market in _spec.markets:
+            _c, _m = _spec.commodity, _market.market
+            _report = _console13.strike_preflight(_c, _m)
+            _expected_gaps = []
+            for _driver in _ALL_DRIVERS:
+                _rows = store.series(
+                    _c, _m, _driver, _date13(2000, 1, 1), _hend
+                )
+                _last = max((r.obs_date for r in _rows), default=None)
+                _row = next(
+                    d for d in _report.drivers if d.driver == _driver
+                )
+                if _driver not in _spec.drivers:
+                    if _last is not None or _row.state != "missing":
+                        counters["console_preflight_errors"] += 1
+                    _expected_gaps.append(
+                        f"driver {_driver} is missing — "
+                        f"{_spec.display} does not report it"
+                    )
+                    continue
+                if _last is None:
+                    if _row.state != "missing":
+                        counters["console_preflight_errors"] += 1
+                    _expected_gaps.append(
+                        f"driver {_driver} is missing — never "
+                        f"reported for {_c}/{_m}"
+                    )
+                    continue
+                _age = (_hend - _last).days
+                _want = (
+                    "present"
+                    if _age <= _cpack.obs_fresh_days
+                    else "stale"
+                )
+                if (
+                    _row.state != _want
+                    or _row.last_observed_date != _last
+                    or _row.age_days != _age
+                ):
+                    counters["console_preflight_errors"] += 1
+                if _want == "stale":
+                    _expected_gaps.append(
+                        f"driver {_driver} is stale — last observed "
+                        f"{_last.isoformat()}, {_age} days before "
+                        f"the as-of"
+                    )
+            _weeks = [
+                i for i in store.list_indices(_c) if i.week_end <= _hend
+            ]
+            if not _weeks:
+                if _report.sentiment.state != "absent":
+                    counters["console_preflight_errors"] += 1
+                _expected_gaps.append(
+                    f"sentiment is absent — no index week stands "
+                    f"for {_c}"
+                )
+            else:
+                _latest = max(i.week_end for i in _weeks)
+                _sage = (_hend - _latest).days
+                _swant = (
+                    "current"
+                    if _sage <= _cpack.sentiment_fresh_days
+                    else "stale"
+                )
+                if (
+                    _report.sentiment.state != _swant
+                    or _report.sentiment.age_days != _sage
+                ):
+                    counters["console_preflight_errors"] += 1
+                if _swant == "stale":
+                    _expected_gaps.append(
+                        f"sentiment is stale — last index week ended "
+                        f"{_latest.isoformat()}, {_sage} days before "
+                        f"the as-of"
+                    )
+            for _h in _HORIZONS13:
+                _rec = store.get_accuracy_record(_c, _m, _h)
+                _crow = next(
+                    x for x in _report.coverage if x.horizon_days == _h
+                )
+                _cwant = (
+                    "unmeasured" if _rec is None
+                    else "degraded" if _rec.degraded
+                    else "measured"
+                )
+                if _crow.state != _cwant:
+                    counters["console_preflight_errors"] += 1
+                if _cwant == "unmeasured":
+                    _expected_gaps.append(
+                        f"no backtest coverage at the {_h}-day "
+                        f"horizon — accuracy unmeasured"
+                    )
+            if _report.gaps != _expected_gaps:
+                counters["console_preflight_errors"] += 1
+            if _report.state != ("gapped" if _expected_gaps else "clear"):
+                counters["console_preflight_errors"] += 1
+            counters["console_preflight_errors"] += len(
+                _verify_preflight(store, _report)
+            )
+
+    # a tampered pre-flight payload is refused by re-performance
+    _coffee13 = _console13.strike_preflight("coffee", "bengaluru")
+    _conn13 = _sqlite3_13.connect(str(tmp / "evals.db"))
+    _orig13 = _conn13.execute(
+        "SELECT payload FROM preflight_reports WHERE report_id = ?",
+        (_coffee13.report_id,),
+    ).fetchone()[0]
+    _tampered13 = _json13.loads(_orig13)
+    _tampered13["gaps"] = []
+    _conn13.execute(
+        "UPDATE preflight_reports SET payload = ? WHERE report_id = ?",
+        (_json13.dumps(_tampered13), _coffee13.report_id),
+    )
+    _conn13.commit()
+    if not _verify_preflight(
+        store, store.get_preflight_report(_coffee13.report_id)
+    ):
+        counters["console_preflight_errors"] += 1
+    _conn13.execute(
+        "UPDATE preflight_reports SET payload = ? WHERE report_id = ?",
+        (_orig13, _coffee13.report_id),
+    )
+    _conn13.commit()
+    _conn13.close()
+
+    # review queue: states from the pinned attachments, the
+    # pack's order, and the prior-official arithmetic
+    _chili13 = _plain13.run_forecast(
+        "chili", "guntur", as_of=_date13(2025, 12, 15)
+    )
+    _wheat_early = _plain13.run_forecast(
+        "wheat", "delhi_khari_baoli", as_of=_date13(2025, 12, 10)
+    )
+    _plain13.approve(
+        _wheat_early.forecast_id, "d.kaur", "desk_head",
+        _date13(2026, 1, 2),
+    )
+    _wheat13 = _plain13.run_forecast(
+        "wheat", "delhi_khari_baoli", as_of=_date13(2025, 12, 15)
+    )
+    _queue13 = _console13.review_queue()
+    _rank13 = {"degraded": 0, "unmeasured": 1, "measured": 2}
+    _keys13 = [
+        (_rank13[r["accuracy_state"]], r["as_of"], r["forecast_id"])
+        for r in _queue13
+    ]
+    if _keys13 != sorted(_keys13):
+        counters["console_review_queue_errors"] += 1
+    _qids13 = [r["forecast_id"] for r in _queue13]
+    if not (
+        _chili13.forecast_id in _qids13
+        and _wheat13.forecast_id in _qids13
+        and _qids13.index(_chili13.forecast_id)
+        < _qids13.index(_wheat13.forecast_id)
+    ):
+        counters["console_review_queue_errors"] += 1
+    for _row13 in _queue13:
+        _fc13 = store.get_forecast(_row13["forecast_id"])
+        if _fc13 is None or _fc13.accuracy.state != _row13["accuracy_state"]:
+            counters["console_review_queue_errors"] += 1
+            continue
+        if _row13["prior_official_id"] is not None:
+            _prior13 = store.get_forecast(_row13["prior_official_id"])
+            _approval13 = store.get_approval(_row13["prior_official_id"])
+            if (
+                _prior13 is None
+                or _approval13 is None
+                or _prior13.commodity != _fc13.commodity
+                or _prior13.market != _fc13.market
+                or not _prior13.as_of < _fc13.as_of
+            ):
+                counters["console_review_queue_errors"] += 1
+            else:
+                _p_now = next(
+                    s.p50 for s in _fc13.horizons_summary
+                    if s.horizon_days == 30
+                )
+                _p_then = next(
+                    s.p50 for s in _prior13.horizons_summary
+                    if s.horizon_days == 30
+                )
+                if _row13["delta_p50_30"] != round(_p_now - _p_then, 2):
+                    counters["console_review_queue_errors"] += 1
+
+    # rejection: the act is final — no approval path reopens it
+    _console13.reject_forecast(
+        _chili13.forecast_id, "d.kaur", "desk_head",
+        _date13(2026, 1, 3), "stale_inputs",
+        "arrivals feed stale at the run",
+    )
+    try:
+        _plain13.approve(
+            _chili13.forecast_id, "d.kaur", "desk_head",
+            _date13(2026, 1, 4),
+        )
+        counters["console_rejection_errors"] += 1
+    except _ApprovalStateError:
+        pass
+    if _chili13.forecast_id in [
+        r["forecast_id"] for r in _console13.review_queue()
+    ]:
+        counters["console_rejection_errors"] += 1
+    try:
+        _console13.reject_forecast(
+            _chili13.forecast_id, "r.menon", "desk_head",
+            _date13(2026, 1, 4), "accuracy_not_credible",
+        )
+        counters["console_rejection_errors"] += 1
+    except _ConsoleStateError:
+        pass
+    counters["console_rejection_errors"] += len(_verify_console(store))
+
+    # triage: the gate on the official view, both directions
+    _events13.triage_exclusions = _console13.excluded_event_ids
+    _guarded13 = _ForecastService13(
+        store,
+        _OfflineModel13(),
+        events_provider=_events13.forecast_adjustments,
+        approval_guard=_console13.approval_blockers,
+    )
+    _forged13 = _events13.register_event(
+        event_class="tariff_change", commodity="soybean",
+        window_start=_date13(2025, 6, 15),
+        window_end=_date13(2025, 7, 15), channel="import_flow",
+        peak_log_price_effect=0.60, basis="desk_estimate",
+        basis_detail="A desk estimate of the tariff's pass-through, "
+        "stated for triage grading",
+        decay_days=10,
+        description="A claimed tariff step on oilseed imports",
+        declared_by="a.sharma", declared_on=_date13(2025, 6, 10),
+    )
+    if _events13.verify_event(_forged13.event_id).status != "unverified":
+        counters["console_triage_errors"] += 1
+    _draft13 = _guarded13.run_forecast(
+        "soybean", "indore", as_of=_date13(2025, 5, 31)
+    )
+    if _forged13.event_id not in _draft13.method.events_applied:
+        counters["console_triage_errors"] += 1
+    _blockers13 = _console13.approval_blockers(_draft13)
+    if not any(_forged13.event_id in b for b in _blockers13):
+        counters["console_triage_errors"] += 1
+    try:
+        _guarded13.approve(
+            _draft13.forecast_id, "d.kaur", "desk_head",
+            _date13(2025, 6, 2),
+        )
+        counters["console_triage_errors"] += 1
+    except _ApprovalStateError:
+        pass
+    _console13.confirm_event(
+        _forged13.event_id, "a.sharma", "analyst", _date13(2025, 6, 2),
+        "checked against the customs circular",
+    )
+    if any(
+        _forged13.event_id in b
+        for b in _console13.approval_blockers(_draft13)
+    ):
+        counters["console_triage_errors"] += 1
+    # the desk clears every remaining applied-event blocker the
+    # same way (earlier eval sections declared their own probes
+    # over this window); with the queue cleared, approval stands
+    for _applied13 in _draft13.method.events_applied:
+        if any(
+            _applied13 in b
+            for b in _console13.approval_blockers(_draft13)
+        ):
+            _console13.confirm_event(
+                _applied13, "a.sharma", "analyst", _date13(2025, 6, 2),
+                "cleared in the eval's triage pass",
+            )
+    if _console13.approval_blockers(_draft13):
+        counters["console_triage_errors"] += 1
+    _guarded13.approve(
+        _draft13.forecast_id, "d.kaur", "desk_head", _date13(2025, 6, 2)
+    )
+
+    _retire13 = _events13.register_event(
+        event_class="logistics_disruption", commodity="cumin",
+        window_start=_date13(2025, 3, 1),
+        window_end=_date13(2025, 3, 20), channel="arrivals",
+        peak_log_price_effect=0.07, basis="desk_estimate",
+        basis_detail="A corridor report, stated for triage grading",
+        decay_days=10,
+        description="A claimed corridor disruption into Unjha",
+        declared_by="a.sharma", declared_on=_date13(2025, 2, 20),
+    )
+    _first13 = _guarded13.run_forecast(
+        "cumin", "unjha", as_of=_date13(2025, 2, 15)
+    )
+    if _retire13.event_id not in _first13.method.events_applied:
+        counters["console_triage_errors"] += 1
+    _console13.retire_event(
+        _retire13.event_id, "a.sharma", "analyst",
+        _date13(2025, 2, 21), "the corridor report was a misread",
+    )
+    if not any(
+        _retire13.event_id in b and "retired" in b
+        for b in _console13.approval_blockers(_first13)
+    ):
+        counters["console_triage_errors"] += 1
+    _second13 = _guarded13.run_forecast(
+        "cumin", "unjha", as_of=_date13(2025, 2, 15)
+    )
+    if _retire13.event_id in _second13.method.events_applied:
+        counters["console_triage_errors"] += 1
+
+    _amend13 = _events13.register_event(
+        event_class="weather_shock", commodity="chili",
+        window_start=_date13(2025, 2, 1),
+        window_end=_date13(2025, 2, 28), channel="weather_index",
+        driver_effect=-0.4, peak_log_price_effect=0.05,
+        basis="desk_estimate",
+        basis_detail="A field report, stated for triage grading",
+        decay_days=10,
+        description="A claimed dry spell in the chili belt",
+        declared_by="a.sharma", declared_on=_date13(2025, 1, 20),
+    )
+    _adraft13 = _guarded13.run_forecast(
+        "chili", "guntur", as_of=_date13(2025, 1, 15)
+    )
+    if _amend13.event_id not in _adraft13.method.events_applied:
+        counters["console_triage_errors"] += 1
+    _act13 = _console13.amend_event(
+        _amend13.event_id, "a.sharma", "analyst", _date13(2025, 1, 22),
+        {
+            "event_class": "weather_shock", "commodity": "chili",
+            "window_start": _date13(2025, 2, 1),
+            "window_end": _date13(2025, 2, 28),
+            "channel": "weather_index", "driver_effect": -0.4,
+            "peak_log_price_effect": 0.09, "basis": "desk_estimate",
+            "basis_detail": "Revised pass-through after the second "
+            "field report",
+            "decay_days": 10,
+            "description": "A claimed dry spell in the chili belt",
+            "declared_by": "a.sharma",
+            "declared_on": _date13(2025, 1, 22),
+        },
+        "peak revised on the second field report",
+    )
+    if _console13.triage_state(_amend13.event_id) != "superseded":
+        counters["console_triage_errors"] += 1
+    if not any(
+        (_act13.replacement_event_id or "") in b
+        for b in _console13.approval_blockers(_adraft13)
+    ):
+        counters["console_triage_errors"] += 1
+    _afresh13 = _guarded13.run_forecast(
+        "chili", "guntur", as_of=_date13(2025, 1, 15)
+    )
+    if (
+        _act13.replacement_event_id not in _afresh13.method.events_applied
+        or _amend13.event_id in _afresh13.method.events_applied
+    ):
+        counters["console_triage_errors"] += 1
+    counters["console_triage_errors"] += len(_verify_console(store))
+
+    # action parity: the console's action door (the phone's
+    # door) strikes the identical act as the canonical path,
+    # on a twin store holding the same artefacts
+    from fmcg_forecast.alerts.models import (
+        AlertInstance as _AlertInstance13,
+    )
+    from fmcg_forecast.alerts.pack import (
+        load_alert_pack as _load_alert_pack13,
+    )
+    from fmcg_forecast.alerts.service import (
+        AlertService as _AlertService13,
+    )
+    from fmcg_forecast.store import build_store as _build_store13
+    from fmcg_forecast.truth import build_truth_store as _build_truth13
+    from fmcg_forecast.workflow import load_dataset as _load_dataset13
+
+    _twin = _build_store13(str(tmp / "evals-twin.db"))
+    _twin_truth = _build_truth13(str(tmp / "evals-twin.db"))
+    _load_dataset13(_twin, _twin_truth, data.manifest.seed)
+    _twin_console = _ConsoleService(_twin, _EventService13(_twin))
+    _parity_fc = _plain13.run_forecast(
+        "groundnut", "rajkot", as_of=_date13(2025, 11, 30)
+    )
+    _twin.insert_forecast(_parity_fc)
+    _direct = _plain13.approve(
+        _parity_fc.forecast_id, "d.kaur", "desk_head",
+        _date13(2026, 1, 5),
+    )
+    _via_door = _twin_console.dispatch_action(
+        {
+            "kind": "approve_forecast",
+            "forecast_id": _parity_fc.forecast_id,
+            "approver": "d.kaur", "role": "desk_head",
+            "decided_on": "2026-01-05",
+        }
+    )
+    if _via_door != _direct.model_dump(mode="json"):
+        counters["console_action_parity_errors"] += 1
+    _parity_fc2 = _plain13.run_forecast(
+        "groundnut", "gondal", as_of=_date13(2025, 11, 30)
+    )
+    _twin.insert_forecast(_parity_fc2)
+    _direct_rej = _console13.reject_forecast(
+        _parity_fc2.forecast_id, "d.kaur", "desk_head",
+        _date13(2026, 1, 5), "duplicate_of_newer_run",
+    )
+    _door_rej = _twin_console.dispatch_action(
+        {
+            "kind": "reject_forecast",
+            "forecast_id": _parity_fc2.forecast_id,
+            "rejected_by": "d.kaur", "role": "desk_head",
+            "decided_on": "2026-01-05",
+            "reason": "duplicate_of_newer_run",
+        }
+    )
+    if _door_rej != _direct_rej.model_dump(mode="json"):
+        counters["console_action_parity_errors"] += 1
+    from datetime import datetime as _datetime13
+
+    _alert13 = _AlertInstance13(
+        alert_id="ALT-evalparity",
+        subscription_id="SUB-eval", subscriber="d.kaur",
+        kind="buy_signal", commodity="wheat",
+        market="delhi_khari_baoli", severity="major",
+        trigger_id="SIG-eval", trigger_summary={"value": "buy_now"},
+        raised_at=_datetime13(2026, 1, 5, 9, 0),
+        pack_version=_load_alert_pack13().version,
+        scope_note="signal only — no trade is placed",
+    )
+    store.insert_alert(_alert13)
+    _twin.insert_alert(_alert13)
+    _direct_act = _AlertService13(store).acknowledge(
+        _alert13.alert_id, "d.kaur", "desk_head",
+        _datetime13(2026, 1, 6, 10, 30), "seen",
+    )
+    _door_act = _twin_console.dispatch_action(
+        {
+            "kind": "acknowledge_alert", "alert_id": _alert13.alert_id,
+            "actor": "d.kaur", "role": "desk_head",
+            "acted_at": "2026-01-06T10:30:00", "note": "seen",
+        }
+    )
+    if _door_act != _direct_act.model_dump(mode="json"):
+        counters["console_action_parity_errors"] += 1
+
+    print("Round 13 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio + R7 prompt-to-dashboard + R8 buy signals & coverage planning + R9 alerting, subscriptions & escalation + R10 thin-data depth & assisted intake + R11 production data plane + R12 forecast-ops analytics & shock grading + R13 operator console: review queue & rejection, event triage gate, coverage pre-flight, phone action parity)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]
