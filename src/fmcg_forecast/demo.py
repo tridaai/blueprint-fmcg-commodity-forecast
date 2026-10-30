@@ -584,6 +584,71 @@ def main() -> int:
           f"{view['provenance']['confirmed_by']}")
     print(f"  chain re-performance over every intake entry: "
           f"{len(intake.verify_all())} problems")
+
+    print("\n--- production data plane (R11, F20-DI1/DI2/DI4): a source registry, one validation path, corrections as overlays ---")
+    from fmcg_forecast.ingest.service import IngestService
+    from fmcg_forecast.ingest.verify import verify_replay
+
+    ingest = IngestService(store)
+    print(f"  registry (ingest pack {ingest.pack_version()}): "
+          + ", ".join(s.source_id for s in ingest.list_sources()))
+    drop = "\n".join(
+        [
+            "commodity,market,obs_date,driver,value,unit",
+            "coffee,bengaluru,2025-12-31,modal_price,34100,INR/quintal",
+            "coffee,bengaluru,2025-12-31,arrivals,2600,quintal/day",
+            "coffee,bengaluru,2025-12-24,arrivals,-50,quintal/day",
+            "coffee,bengaluru,2026-03-02,modal_price,35000,INR/quintal",
+        ]
+    )
+    batch = ingest.load_file_drop(
+        "agmarknet_file_drop", drop, as_of=date(2026, 1, 5),
+        received_by="d.rao", received_at=_datetime(2026, 1, 5, 9, 0),
+    )
+    reasons = {
+        r.row_index: r.reasons
+        for r in ingest.list_quarantine(batch_id=batch.batch_id)
+    }
+    print(f"  batch {batch.batch_id}: {batch.rows_loaded} landed, "
+          f"{batch.rows_quarantined} quarantined — row 2 "
+          f"{reasons[2]}, row 3 {reasons[3]}; each landed fact "
+          f"carries its provenance row")
+    again = ingest.load_file_drop(
+        "agmarknet_file_drop", drop, as_of=date(2026, 1, 5),
+        received_by="d.rao", received_at=_datetime(2026, 1, 6, 9, 0),
+    )
+    print(f"  the same drop re-delivered is the same artefact "
+          f"({again.batch_id == batch.batch_id}) and lands nothing twice")
+    ingest.correct(
+        "coffee", "bengaluru", date(2025, 12, 31), "modal_price",
+        34250.0, reason="transcription slip in the phoned figure",
+        corrected_by="r.menon", corrected_by_role="desk_head",
+        corrected_at=_datetime(2026, 1, 5, 11, 0),
+    )
+    effective = ingest.effective_fact(
+        "coffee", "bengaluru", date(2025, 12, 31), "modal_price"
+    )
+    stored = store.series(
+        "coffee", "bengaluru", "modal_price",
+        date(2025, 12, 31), date(2025, 12, 31),
+    )
+    print(f"  a correction overlays the landed price: the stored "
+          f"observation still reads {stored[0].value}, the "
+          f"effective fact reads {effective['effective_value']} "
+          f"({effective['state']})")
+    replay = ingest.replay_backtests(
+        "cumin", "unjha", [date(2025, 11, 15)],
+        replayed_by="d.rao", replayed_at=_datetime(2026, 1, 5, 12, 0),
+    )
+    record = store.get_accuracy_record("cumin", "unjha", 30)
+    print(f"  backfill replay at 2025-11-15 (an origin the grid "
+          f"never ran): {replay.results_stored} results stored; "
+          f"the 30-day ledger now pools {len(record.origins)} "
+          f"origins, latest {record.origins[-1].isoformat()}")
+    print(f"  re-performance of the whole data plane: "
+          f"{len(ingest.verify_all())} problems; the replay "
+          f"artefact re-performs with "
+          f"{len(verify_replay(store, replay))} problems")
     print(f"sealed truth rows stored: {truth_store.count()} (readable only via the truth store)")
     return 0
 

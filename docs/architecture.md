@@ -241,6 +241,38 @@ LangGraph state machine whose transitions are stored artefacts:
   (landing nothing); the chain re-performs, and an
   observation standing at a pending or rejected entry's
   key is graded leakage.
+- **production data plane** (R11, landed): the connector
+  framework, quarantine & correction workflow, and
+  historical backfill & replay (F20-DI1/DI2/DI4). Sources
+  are registry artefacts under a versioned ingest pack —
+  built-ins plus named-act desk registrations, each pinned
+  to the catalogue's canonical units, conversion living
+  upstream of the port. File drops and API pushes are
+  judged by one pure validation path: a clean row lands
+  through the store's ordinary insert path and gains a
+  provenance row naming its batch and source; a bad row
+  quarantines with its exact planted reasons from the
+  pack vocabulary; a batch that cannot name its source
+  and as-of, or whose units disagree with the registry,
+  is refused whole and the refusal is stored as an
+  artefact. Batch content addresses exclude the receipt
+  stamp, so re-delivery is the same artefact and lands
+  nothing twice — replay is idempotent by construction.
+  Corrections are insert-only overlays superseding by
+  link; the stored observation is never rewritten, and
+  the effective fact at a key is the fold of landed value
+  and correction chain, a correction answering a
+  quarantined row landing nothing. Backfill replay runs
+  the engine at named origins through the harness's
+  seams, stores results insert-if-absent, and rebuilds
+  the series' ledger records in place — the same seam
+  the grid used, so a backfilled series' accuracy is
+  indistinguishable in kind from a gridded one; origins
+  the data cannot support are skipped with the refusal
+  named. The verifier re-performs every artefact family
+  independently, and ingestion never touches a pending
+  intake entry: the maker–checker gate and the connector
+  path stay separate doors into the same store.
 
 ## Failure posture
 

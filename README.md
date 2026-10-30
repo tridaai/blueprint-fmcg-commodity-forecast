@@ -657,6 +657,84 @@ unchanged, so an assisted fact is indistinguishable in the
 series itself from a reported one once confirmed, which is
 the point of the checker gate.
 
+## What Round 11 adds
+
+The production data plane (F20-DI1, F20-DI2, F20-DI4 on the
+roadmap) — how data actually arrives once the generator's
+history is in: named sources under a registry, one
+validation path for every connector, quarantine instead of
+silent drops, corrections that never rewrite history, and
+backfill that earns a series its measured accuracy.
+
+- **The source registry (F20-DI1)** — under the versioned
+  **ingest pack** (v2026.10.1: the value-range vocabulary,
+  the quarantine and refusal reason vocabularies, the
+  connector kinds), sources are artefacts: the six built-ins
+  (an Agmarknet-style file drop, an exchange bhavcopy drop,
+  a trade-flow drop, a weather service pull, a mandi API
+  push, the generated-history backfill feed) plus desk
+  registrations as named acts under stated terms.
+  Registration pins each source's drivers to the canonical
+  units — conversion, where it exists, is upstream of this
+  port and never performed here. Every delivery names its
+  source and its as-of; a delivery that cannot is refused
+  whole, and the refusal is itself a stored artefact with
+  its reason (`unknown_source`, `unit_mismatch`,
+  `batch_missing_provenance`, `empty_batch`).
+- **One validation path, quarantine with named reasons
+  (F20-DI2)** — file drops and API pushes are judged by the
+  same code. A clean row lands through the ordinary insert
+  path and gains exactly one **provenance row** naming its
+  batch and source. A bad row is quarantined with its exact
+  reasons from the pack vocabulary — malformed, unprovenanced,
+  unknown commodity or market, a driver the series does not
+  report or the source does not carry, a future date, an
+  out-of-range value, an in-batch conflict, a conflict with
+  what already landed. Re-delivering a batch is the same
+  artefact and lands nothing twice; a later delivery of a
+  landed fact counts as a duplicate, never a second fact.
+- **Corrections as overlays (F20-DI2)** — a landed value that
+  turns out wrong is corrected by an attributed, reasoned
+  act that supersedes the previous correction by link. The
+  stored observation is never rewritten: the **effective
+  fact** at a key is the fold of the landed value and its
+  correction chain, and a correction can also answer a
+  quarantined row — stating what the quarantined value
+  should have been, without landing anything.
+- **Backfill & replay (F20-DI4)** — a series backfilled
+  through the connectors earns its place in the accuracy
+  ledger the same way the grid's series did: replay runs the
+  engine at chosen origins through the harness's own seams,
+  stores each result if absent, and rebuilds the series'
+  ledger records in place. Origins the data cannot support
+  are skipped with the engine's refusal named on the replay
+  artefact — never silently dropped. The verifier
+  re-performs batches, correction chains, provenance and
+  replays; one mismatch refuses the artefact.
+- **Surfaces** — migration 0011 (both dialects); `GET
+  /ingest/pack`, `GET`/`POST /ingest/sources`, `POST
+  /ingest/batches/file` + `/push`, `GET /ingest/batches` +
+  `/{id}`, `GET /ingest/quarantine`, `POST`/`GET
+  /ingest/corrections`, `GET /ingest/effective`, `POST
+  /ingest/backfill/replay`, `GET /ingest/verify`; the
+  `fmcg-agent-ingest` CLI; and `scripts/prod_smoke.py`, the
+  production smoke that stands the app on Postgres, applies
+  the migration chain, loads the dataset, runs the grid and
+  exercises the data plane end to end. The demo loads a
+  drop with a quarantined pair, replays it, corrects a
+  landed price and replays an origin the grid never ran.
+
+Honest positions, stated plainly: the connector framework
+covers file drops and API pushes — the two shapes the desk
+actually receives — and not live streaming feeds; a
+scheduled pull is a registered kind whose deliveries still
+arrive as batches through the same path. Corrections state
+the desk's current belief about a fact; the landed record
+and its provenance stay exactly as delivered, which is what
+makes the fold auditable. Backfill replay computes real
+backtests — it is priced in engine runs, and the replay
+artefact says plainly which origins were skipped and why.
+
 ## Honest status
 
 - **Built and gated in R1:** the spine, generator + manifest, store port +
@@ -786,6 +864,26 @@ the point of the checker gate.
   the same shape as 0007's (which was itself not live-applied);
   the Postgres profile remains verified by parity of the SQL,
   not by a live cluster run in this round.
+- **Built and gated in R11:** the ingest pack (value ranges,
+  the quarantine and refusal vocabularies, connector kinds),
+  the source registry (six built-ins plus named-act desk
+  registrations with canonical units pinned), the connector
+  framework (file drop + API push through one validation
+  path), quarantine with exact named reasons, whole-batch
+  refusal artefacts, provenance rows for every landed fact,
+  correction overlays with the effective-fact fold,
+  backfill replay earning a series its ledger through the
+  harness's seams, the data-plane verifier (batches,
+  corrections, provenance, replays — tamper included),
+  migration 0011, the ingest API surface, the
+  `fmcg-agent-ingest` CLI, the demo walk, and the Postgres
+  production smoke (`scripts/prod_smoke.py`) exercising
+  migrations, the dataset load, the backtest grid and the
+  data plane on a live cluster. Eval gate v10 adds
+  zero-tolerance counters for quarantine exactness,
+  provenance, replay idempotence, refusals, correction
+  folds and backfill; the truth-isolation scan now covers
+  the ingest package too.
 - **Not yet built:** the console (R13). The round map runs to
   R20 and continues past it until the production bar is met.
 - **The dataset in this repo is generated in-repo for the blueprint** — gold
@@ -916,8 +1014,19 @@ src/fmcg_forecast/
     service.py     enter / confirm / reject — maker–checker
     verify.py      chain re-performance + leakage grading
     cli.py         the fmcg-agent-intake command line
-migrations/        0001-0010 SQL, sqlite + postgres dialects
-scripts/           demo.py, local_harness.py
+  ingest/          the production data plane (truth-isolated, R11):
+    pack.py        the ingest pack: value ranges, quarantine
+                   and refusal vocabularies, connector kinds
+    models.py      source registration / batch / quarantine /
+                   provenance / correction / replay artefacts
+    connectors.py  file-drop and API-push delivery parsing
+    validate.py    the one validation path, in pure functions
+    service.py     register / load / correct / replay — one workflow
+    verify.py      batch, correction, provenance, replay
+                   re-performance
+    cli.py         the fmcg-agent-ingest command line
+migrations/        0001-0011 SQL, sqlite + postgres dialects
+scripts/           demo.py, local_harness.py, prod_smoke.py
 evals/             the eval gate
 docs/              architecture.md
 ```
