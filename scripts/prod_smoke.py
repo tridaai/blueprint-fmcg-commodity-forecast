@@ -1,7 +1,8 @@
 """Production smoke: the Postgres profile, end to end.
 
 Stands the application up against the production-shaped
-store — Postgres 16 via ``DATABASE_URL`` — in a throwaway
+store — Postgres 16 via ``DATABASE_URL`` (a UTF-8 database;
+the store layer reads text back as text) — in a throwaway
 schema, and checks the things a deployment must prove
 before it serves:
 
