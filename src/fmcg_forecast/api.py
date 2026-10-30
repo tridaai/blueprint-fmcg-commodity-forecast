@@ -61,6 +61,14 @@ from fmcg_forecast.alerts.service import (
 from fmcg_forecast.backtest.harness import run_all as run_backtest_harness
 from fmcg_forecast.backtest.pack import load_accuracy_pack
 from fmcg_forecast.catalogue import COMMODITIES
+from fmcg_forecast.console.engine import (
+    ConsoleNotFoundError,
+    ConsoleStateError,
+    ConsoleValidationError,
+)
+from fmcg_forecast.console.pack import load_console_pack
+from fmcg_forecast.console.render import render_console, render_console_phone
+from fmcg_forecast.console.service import ConsoleService
 from fmcg_forecast.dashboards.pack import load_dashboard_pack
 from fmcg_forecast.dashboards.service import (
     DashboardNotFoundError,
@@ -147,6 +155,7 @@ class RunForecastRequest(BaseModel):
     market: str
     as_of: date | None = None
     via_backtest: bool = False
+    preflight_id: str | None = None
 
 
 class ApproveRequest(BaseModel):
@@ -347,17 +356,66 @@ class ReplayRequest(BaseModel):
     at: datetime | None = None
 
 
+class RejectForecastRequest(BaseModel):
+    rejected_by: str
+    role: str
+    decided_on: date | None = None
+    reason: str
+    note: str = ""
+
+
+class StrikePreflightRequest(BaseModel):
+    commodity: str
+    market: str
+    as_of: date | None = None
+
+
+class TriageActRequest(BaseModel):
+    actor: str
+    role: str
+    acted_on: date | None = None
+    note: str = ""
+
+
+class AmendEventRequest(BaseModel):
+    actor: str
+    role: str
+    acted_on: date | None = None
+    note: str = ""
+    replacement: RegisterEventRequest
+
+
+class ConsoleActionRequest(BaseModel):
+    kind: str
+    forecast_id: str | None = None
+    event_id: str | None = None
+    alert_id: str | None = None
+    approver: str | None = None
+    rejected_by: str | None = None
+    actor: str | None = None
+    role: str | None = None
+    decided_on: date | None = None
+    acted_on: date | None = None
+    acted_at: datetime | None = None
+    reason: str | None = None
+    note: str = ""
+    replacement: RegisterEventRequest | None = None
+
+
 def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     model_port = model or OfflineModel()
     sentiment = SentimentService(store, model_port)
     event_service = EventService(store)
+    console_service = ConsoleService(store, event_service)
     service = ForecastService(
         store,
         model_port,
         sentiment_provider=sentiment.forecast_input,
         sentiment_claim_verifier=sentiment.verify_claims,
         events_provider=event_service.forecast_adjustments,
+        approval_guard=console_service.approval_blockers,
     )
+    event_service.triage_exclusions = console_service.excluded_event_ids
     scenario_service = ScenarioService(
         store,
         model_port,
@@ -377,7 +435,7 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     analytics_service = AnalyticsService(store)
     app = FastAPI(
         title="FMCG Commodity Forecast — Operations API",
-        version="0.12.0",
+        version="0.13.0",
         description="Read surfaces for the commodity price & driver store, "
         "the governed forecast surface, the backtest/accuracy surface, "
         "the sentiment surface, the event registry, the scenario "
@@ -394,7 +452,12 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
         "and the forecast-ops analytics surface: accuracy "
         "trends, signal outcomes, transmission error by event "
         "class and shock-window grades, computed from the "
-        "artefacts of record.",
+        "artefacts of record, and the operator console: the "
+        "forecast review queue with rejection acts, the event "
+        "triage queue gating the official view, coverage "
+        "pre-flights a run can pin, and the desktop and "
+        "phone-first console pages whose actions strike the "
+        "same acts.",
     )
 
     @app.middleware("http")
@@ -505,6 +568,7 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
                 body.market,
                 body.as_of,
                 via_backtest=body.via_backtest,
+                preflight_id=body.preflight_id,
             )
         except SealedWindowRefusal as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -596,6 +660,32 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
             )
         return approval.model_dump(mode="json")
 
+    @app.post("/forecasts/{forecast_id}/reject")
+    def reject_forecast(forecast_id: str, body: RejectForecastRequest) -> dict:
+        try:
+            act = console_service.reject_forecast(
+                forecast_id,
+                body.rejected_by,
+                body.role,
+                body.decided_on or date.today(),
+                body.reason,
+                body.note,
+            )
+        except ConsoleNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ConsoleValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ConsoleStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return act.model_dump(mode="json")
+
+    @app.get("/forecasts/{forecast_id}/rejection")
+    def get_rejection(forecast_id: str) -> dict:
+        try:
+            return console_service.rejection_view(forecast_id)
+        except ConsoleNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.post("/forecasts/{forecast_id}/commentary")
     def draft_commentary(forecast_id: str) -> dict:
         try:
@@ -638,9 +728,32 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     @app.get("/forecasts/{forecast_id}/events")
     def get_forecast_events(forecast_id: str) -> dict:
         try:
-            return service.events_view(forecast_id)
+            view = service.events_view(forecast_id)
+            forecast = service.get_forecast(forecast_id)
         except ForecastNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        # R13: every applied event is labelled with its triage
+        # state and transmission verdict, and the blockers that
+        # would refuse this draft's approval ride on the read —
+        # an unconfirmed event's full amount is in the draft,
+        # labelled as such, and contributes zero to any official
+        # view until triage clears it.
+        from fmcg_forecast.console.engine import applied_event_flags
+
+        flags = {
+            flag.event_id: flag
+            for flag in applied_event_flags(store, event_service, forecast)
+        }
+        for entry in view["events"]:
+            flag = flags.get(entry["event_id"])
+            entry["verification_status"] = (
+                flag.verification_status if flag else "not_in_registry"
+            )
+            entry["triage_state"] = (
+                flag.triage_state if flag else "not_in_registry"
+            )
+        view["official_blockers"] = console_service.approval_blockers(forecast)
+        return view
 
     # -- the governed event registry (R5, Law 4) -----------------------
 
@@ -1691,5 +1804,189 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
         except AnalyticsNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"report_id": report_id, "problems": problems}
+
+    # -- operator console (R13: F20-OW2, F20-OW3, F20-OW4, F20-MF2) ----
+
+    @app.get("/console/pack")
+    def console_pack() -> dict:
+        return load_console_pack().model_dump(mode="json")
+
+    @app.post("/console/preflights", status_code=201)
+    def strike_preflight(body: StrikePreflightRequest) -> dict:
+        try:
+            report = console_service.strike_preflight(
+                body.commodity, body.market, body.as_of
+            )
+        except ConsoleValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return console_service.preflight_view(report.report_id)
+
+    @app.get("/console/preflights")
+    def list_preflights(
+        commodity: str | None = Query(None), market: str | None = Query(None)
+    ) -> dict:
+        return {
+            "reports": [
+                r.model_dump(mode="json")
+                for r in console_service.list_preflights(commodity, market)
+            ]
+        }
+
+    @app.get("/console/preflights/{report_id}")
+    def get_preflight(report_id: str) -> dict:
+        try:
+            return console_service.preflight_view(report_id)
+        except ConsoleNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/console/preflights/{report_id}/verify")
+    def verify_preflight_endpoint(report_id: str) -> dict:
+        try:
+            report = console_service.get_preflight(report_id)
+        except ConsoleNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        from fmcg_forecast.console.verify import verify_preflight
+
+        return {
+            "report_id": report_id,
+            "problems": verify_preflight(store, report),
+        }
+
+    @app.get("/console/review-queue")
+    def get_review_queue() -> dict:
+        return {"rows": console_service.review_queue()}
+
+    @app.get("/console/triage-queue")
+    def get_triage_queue() -> dict:
+        return {"rows": console_service.triage_queue()}
+
+    @app.get("/market-events/{event_id}/triage")
+    def get_event_triage(event_id: str) -> dict:
+        try:
+            return console_service.triage_view(event_id)
+        except EventNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/market-events/{event_id}/triage/confirm")
+    def confirm_event(event_id: str, body: TriageActRequest) -> dict:
+        try:
+            act = console_service.confirm_event(
+                event_id,
+                body.actor,
+                body.role,
+                body.acted_on or date.today(),
+                body.note,
+            )
+        except EventNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ConsoleValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ConsoleStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return act.model_dump(mode="json")
+
+    @app.post("/market-events/{event_id}/triage/retire")
+    def retire_event(event_id: str, body: TriageActRequest) -> dict:
+        try:
+            act = console_service.retire_event(
+                event_id,
+                body.actor,
+                body.role,
+                body.acted_on or date.today(),
+                body.note,
+            )
+        except EventNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ConsoleValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ConsoleStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return act.model_dump(mode="json")
+
+    @app.post("/market-events/{event_id}/triage/amend")
+    def amend_event(event_id: str, body: AmendEventRequest) -> dict:
+        replacement = body.replacement.model_dump(mode="json")
+        replacement["window_start"] = body.replacement.window_start
+        replacement["window_end"] = body.replacement.window_end
+        replacement["declared_on"] = (
+            body.replacement.declared_on or body.acted_on or date.today()
+        )
+        try:
+            act = console_service.amend_event(
+                event_id,
+                body.actor,
+                body.role,
+                body.acted_on or date.today(),
+                replacement,
+                body.note,
+            )
+        except EventNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ConsoleValidationError, EventValidationError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ConsoleStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return act.model_dump(mode="json")
+
+    @app.get("/console")
+    def get_console(
+        board_date: date | None = Query(None),
+        now: datetime | None = Query(None),
+    ) -> dict:
+        try:
+            return console_service.console_view(board_date, now)
+        except ConsoleNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/console/html")
+    def get_console_html(
+        board_date: date | None = Query(None),
+        now: datetime | None = Query(None),
+    ) -> HTMLResponse:
+        try:
+            view = console_service.console_view(board_date, now)
+        except ConsoleNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return HTMLResponse(render_console(view))
+
+    @app.get("/console/phone")
+    def get_console_phone(
+        board_date: date | None = Query(None),
+        now: datetime | None = Query(None),
+    ) -> HTMLResponse:
+        try:
+            view = console_service.console_view(board_date, now)
+        except ConsoleNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return HTMLResponse(render_console_phone(view))
+
+    @app.post("/console/actions")
+    def console_action(body: ConsoleActionRequest) -> dict:
+        action = body.model_dump(mode="json")
+        action = {k: v for k, v in action.items() if v is not None}
+        if body.replacement is not None:
+            replacement = body.replacement.model_dump(mode="json")
+            replacement["window_start"] = body.replacement.window_start
+            replacement["window_end"] = body.replacement.window_end
+            replacement["declared_on"] = (
+                body.replacement.declared_on or body.acted_on or date.today()
+            )
+            action["replacement"] = replacement
+        try:
+            return console_service.dispatch_action(action)
+        except (ConsoleNotFoundError, EventNotFoundError, AlertNotFoundError,
+                ForecastNotFoundError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ConsoleValidationError, EventValidationError,
+                AlertValidationError, ApprovalValidationError,
+                KeyError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except (ConsoleStateError, AlertStateError,
+                ApprovalStateError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/console/verify")
+    def verify_console_endpoint() -> dict:
+        return {"problems": console_service.verify_stored()}
 
     return app
