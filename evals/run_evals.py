@@ -2352,23 +2352,25 @@ def main() -> int:
         counters["ingest_correction_errors"] += 1
     counters["ingest_correction_errors"] += len(_ingest.verify_all())
 
-    # backfill replay: origins the grid never ran earn their
-    # place in the series' results and its pooled ledger
+    # backfill replay: origins after the grid's last earn
+    # their place in the series' results and its pooled
+    # ledger (the pack pools the most recent six origins, so
+    # the replayed origins must postdate the grid's)
     _replay = _ingest.replay_backtests(
         "cumin", "unjha",
-        [_date(2025, 1, 15), _date(2025, 2, 15), _date(2025, 3, 15)],
+        [_date(2025, 10, 15), _date(2025, 11, 15), _date(2025, 12, 15)],
         replayed_by="eval.desk", replayed_at=_datetime(2026, 1, 5, 13, 0),
     )
     if _replay.results_stored != 9 or _replay.skipped:
         counters["ingest_backfill_errors"] += 1
     _record30 = store.get_accuracy_record("cumin", "unjha", 30)
-    if _record30 is None or _date(2025, 3, 15) not in _record30.origins:
+    if _record30 is None or _date(2025, 12, 15) not in _record30.origins:
         counters["ingest_backfill_errors"] += 1
     if _verify_replay(store, _replay):
         counters["ingest_backfill_errors"] += 1
     _replay2 = _ingest.replay_backtests(
         "cumin", "unjha",
-        [_date(2025, 1, 15), _date(2025, 2, 15), _date(2025, 3, 15)],
+        [_date(2025, 10, 15), _date(2025, 11, 15), _date(2025, 12, 15)],
         replayed_by="eval.desk", replayed_at=_datetime(2026, 1, 5, 14, 0),
     )
     if _replay2.results_stored != 0 or _replay2.results_already_on_record != 9:
