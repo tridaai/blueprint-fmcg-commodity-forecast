@@ -590,7 +590,7 @@ def main() -> int:
     from fmcg_forecast.ingest.verify import verify_replay
 
     ingest = IngestService(store)
-    print(f"  registry (ingest pack {ingest.pack_version()}): "
+    print(f"  registry (ingest pack {ingest.pack.version}): "
           + ", ".join(s.source_id for s in ingest.list_sources()))
     drop = "\n".join(
         [
