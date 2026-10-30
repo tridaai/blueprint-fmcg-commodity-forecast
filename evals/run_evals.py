@@ -213,6 +213,36 @@ F20-AL1/AL2/AL3), also zero-tolerance:
 - alert_dedup_errors: a repeated sweep raising an alert that
   already stands — a crossing must fire exactly once.
 
+Round 10 counters (thin-data depth + assisted intake,
+Law 7 depth / F20-DI3), also zero-tolerance:
+
+- thin_tier_overstatement_errors: a stored assessment whose
+  tier a fresh re-performance does not earn, or a tier claim
+  (a surface stating a tier) above the earned tier that the
+  claim verifier does not refuse as a contradiction — or an
+  earned-tier claim it wrongly refuses.
+- thin_window_coverage_errors: an assessment window whose
+  operating-day counts, observed counts or named missing
+  dates disagree with an independent recomputation from the
+  observation store, coffee's 365-day window missing any of
+  the planted disruption days, or a stored assessment that
+  does not re-perform field for field.
+- thin_unnamed_gap_errors: a thin series whose assessment,
+  board row or forecast view fails to name a gap — coffee's
+  unreported drivers (stock, trade flows) or groundnut's
+  not-estimable sentiment.
+- intake_unconfirmed_leakage_errors: an observation standing
+  at a pending or rejected intake entry's key — an
+  unconfirmed figure an engine could read.
+- intake_self_check_errors: an enterer confirming or
+  rejecting their own entry (accepted, or leaving the entry
+  in a checked state).
+- intake_chain_errors: a confirmed entry not mapping to
+  exactly one observation carrying its value, a check act
+  whose content address does not recompute, or any chain
+  problem the intake verifier reports over the eval's
+  entries.
+
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
 
@@ -250,6 +280,8 @@ def truth_isolation_violations() -> int:
         + list((base / "signals").rglob("*.py"))
         + list((base / "planning").rglob("*.py"))
         + list((base / "alerts").rglob("*.py"))
+        + list((base / "thin").rglob("*.py"))
+        + list((base / "intake").rglob("*.py"))
     )
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -333,6 +365,12 @@ def main() -> int:
         "alert_escalation_errors": 0,
         "alert_digest_errors": 0,
         "alert_dedup_errors": 0,
+        "thin_tier_overstatement_errors": 0,
+        "thin_window_coverage_errors": 0,
+        "thin_unnamed_gap_errors": 0,
+        "intake_unconfirmed_leakage_errors": 0,
+        "intake_self_check_errors": 0,
+        "intake_chain_errors": 0,
     }
 
     # --- planted events, measured seasonally-matched ---------------
@@ -1943,7 +1981,170 @@ def main() -> int:
     if _digest.alert_ids != _expected_digest:
         counters["alert_digest_errors"] += 1
 
-    print("Round 9 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio + R7 prompt-to-dashboard + R8 buy signals & coverage planning + R9 alerting, subscriptions & escalation)")
+    # --- thin data & assisted intake (R10, Law 7 depth + F20-DI3) -----
+    from fmcg_forecast.dashboards.assemble import (
+        head_forecast as _head_forecast,
+    )
+    from fmcg_forecast.intake.service import (
+        IntakeService as _IntakeService,
+    )
+    from fmcg_forecast.intake.service import (
+        IntakeValidationError as _IntakeValidationError,
+    )
+    from fmcg_forecast.thin.engine import (
+        operating_days as _thin_operating_days,
+    )
+    from fmcg_forecast.thin.pack import (
+        load_thin_data_pack as _load_thin_pack,
+    )
+    from fmcg_forecast.thin.service import ThinDataService as _ThinService
+    from fmcg_forecast.thin.verify import (
+        verify_assessment as _verify_thin,
+    )
+
+    _thin = _ThinService(store, _load_thin_pack())
+
+    # Every graded series' head assessment re-performs, and its
+    # windows recompute independently from the observation
+    # store — operating pattern, observed days, named misses.
+    for _series in (
+        ("wheat", "delhi_khari_baoli"),
+        ("groundnut", "rajkot"),
+        ("coffee", "bengaluru"),
+        ("chili", "guntur"),
+    ):
+        _head = _head_forecast(store, *_series)
+        if _head is None:
+            counters["thin_window_coverage_errors"] += 1
+            continue
+        _assessment = _thin.assess_forecast(_head.forecast_id)
+        for _problem in _verify_thin(store, _assessment):
+            if "tier overstatement" in _problem:
+                counters["thin_tier_overstatement_errors"] += 1
+            else:
+                counters["thin_window_coverage_errors"] += 1
+        _spec = BY_NAME[_series[0]]
+        _price_dates = {
+            r.obs_date
+            for r in store.series(
+                _series[0], _series[1], "modal_price", None, _head.as_of
+            )
+        }
+        for _w in _assessment.windows:
+            _expected = _thin_operating_days(_spec, _w.start, _w.end)
+            _observed = [d for d in _expected if d in _price_dates]
+            _missing = [d for d in _expected if d not in _price_dates]
+            if (
+                _w.operating_days != len(_expected)
+                or _w.observed_days != len(_observed)
+                or _w.missing_operating_dates != _missing
+            ):
+                counters["thin_window_coverage_errors"] += 1
+
+    # Coffee: every unreported driver is named on the
+    # assessment and on the morning board's gap row, and the
+    # 365-day window names exactly the planted disruption days.
+    _coffee_head = _head_forecast(store, "coffee", "bengaluru")
+    _coffee_thin = _thin.assess_forecast(_coffee_head.forecast_id)
+    for _driver in ("stock_level", "import_flow", "export_flow"):
+        if not any(
+            g.startswith(f"{_driver}:") for g in _coffee_thin.named_gaps
+        ):
+            counters["thin_unnamed_gap_errors"] += 1
+    _year = next(w for w in _coffee_thin.windows if w.window_days == 365)
+    if len(_year.missing_operating_dates) != (
+        manifest.coffee_disruption_reporting_days_lost
+    ):
+        counters["thin_window_coverage_errors"] += 1
+    _coffee_rows = [
+        r for r in board.rows
+        if r.kind == "data_gap" and r.commodity == "coffee"
+    ]
+    if not _coffee_rows or not all(
+        d in _coffee_rows[0].headline
+        for d in ("stock_level", "import_flow", "export_flow")
+    ):
+        counters["thin_unnamed_gap_errors"] += 1
+
+    # Groundnut: the not-estimable sentiment driver is named.
+    _groundnut_head = _head_forecast(store, "groundnut", "rajkot")
+    _groundnut_thin = _thin.assess_forecast(_groundnut_head.forecast_id)
+    if not any(
+        g.startswith("sentiment:") for g in _groundnut_thin.named_gaps
+    ):
+        counters["thin_unnamed_gap_errors"] += 1
+
+    # Tier claims: overstating coffee is a contradiction the
+    # claim verifier must refuse; the earned tier must pass.
+    if not _thin.verify_claim(_coffee_head.forecast_id, 30, "established"):
+        counters["thin_tier_overstatement_errors"] += 1
+    _coffee_30 = next(
+        h for h in _coffee_thin.horizons if h.horizon_days == 30
+    )
+    if _thin.verify_claim(_coffee_head.forecast_id, 30, _coffee_30.tier):
+        counters["thin_tier_overstatement_errors"] += 1
+
+    # Assisted intake on two Monday keys (no generated coffee
+    # row stands on a Monday): pending is invisible, the
+    # self-check is refused, confirmation lands exactly one
+    # fact, rejection lands nothing.
+    _intake = _IntakeService(store)
+    _entry = _intake.enter(
+        commodity="coffee", market="bengaluru",
+        obs_date=_date(2025, 12, 29), driver="modal_price",
+        value=34100.0, entered_by="eval.assist",
+        entered_by_role="desk_assistant",
+        entered_at=_datetime(2025, 12, 29, 18, 0),
+        source_note="eval fixture: phoned in by the market contact",
+    )
+    if store.series(
+        "coffee", "bengaluru", "modal_price",
+        _date(2025, 12, 29), _date(2025, 12, 29),
+    ):
+        counters["intake_unconfirmed_leakage_errors"] += 1
+    try:
+        _intake.confirm(
+            _entry.entry_id, checker="eval.assist",
+            checker_role="desk_head",
+            acted_at=_datetime(2025, 12, 29, 18, 30),
+        )
+        counters["intake_self_check_errors"] += 1
+    except _IntakeValidationError:
+        pass
+    if _intake.entry_state(_entry.entry_id) != "pending":
+        counters["intake_self_check_errors"] += 1
+    _intake.confirm(
+        _entry.entry_id, checker="eval.checker",
+        checker_role="desk_head",
+        acted_at=_datetime(2025, 12, 29, 19, 0),
+    )
+    _landed = store.series(
+        "coffee", "bengaluru", "modal_price",
+        _date(2025, 12, 29), _date(2025, 12, 29),
+    )
+    if len(_landed) != 1 or _landed[0].value != 34100.0:
+        counters["intake_chain_errors"] += 1
+    _rejected = _intake.enter(
+        commodity="coffee", market="bengaluru",
+        obs_date=_date(2025, 12, 22), driver="modal_price",
+        value=33800.0, entered_by="eval.assist",
+        entered_by_role="desk_assistant",
+        entered_at=_datetime(2025, 12, 22, 18, 0),
+        source_note="eval fixture: phoned in by the market contact",
+    )
+    _intake.reject(
+        _rejected.entry_id, checker="eval.checker",
+        checker_role="desk_head",
+        acted_at=_datetime(2025, 12, 22, 19, 0),
+    )
+    if store.series(
+        "coffee", "bengaluru", "modal_price",
+        _date(2025, 12, 22), _date(2025, 12, 22),
+    ):
+        counters["intake_unconfirmed_leakage_errors"] += 1
+    counters["intake_chain_errors"] += len(_intake.verify_all())
+
+    print("Round 10 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio + R7 prompt-to-dashboard + R8 buy signals & coverage planning + R9 alerting, subscriptions & escalation + R10 thin-data depth & assisted intake)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]

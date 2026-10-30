@@ -502,6 +502,88 @@ def main() -> int:
     problems = alerting.verify_all()
     print(f"  re-performance of the whole alert set against a fresh "
           f"derivation: {len(problems)} problems")
+
+    print("\n--- thin data & assisted intake (R10, Law 7 depth + F20-DI3): window evidence, earned tiers, maker–checker ---")
+    from fmcg_forecast.intake.service import IntakeService
+    from fmcg_forecast.thin.service import ThinDataService
+
+    thin = ThinDataService(store)
+    groundnut_fc = wired.run_forecast("groundnut", "rajkot")
+    coffee_now = wired.run_forecast("coffee", "bengaluru")
+    for label, fc in (
+        ("groundnut/rajkot", groundnut_fc),
+        ("coffee/bengaluru", coffee_now),
+    ):
+        assessment = thin.assess_forecast(fc.forecast_id)
+        windows = "  ".join(
+            f"{w.window_days}d {w.coverage:.0%}" for w in assessment.windows
+        )
+        tiers = ", ".join(
+            f"{h.horizon_days}d {h.tier}" for h in assessment.horizons
+        )
+        print(f"  {label}: operating-day coverage by window "
+              f"{windows}; confidence tiers {tiers}")
+        for gap in assessment.named_gaps:
+            print(f"    named gap: {gap}")
+    coffee_assessment = thin.assess_forecast(coffee_now.forecast_id)
+    year = next(
+        w for w in coffee_assessment.windows if w.window_days == 365
+    )
+    print(f"  coffee's 365-day window names "
+          f"{len(year.missing_operating_dates)} missing operating "
+          f"days — the planted August 2025 reporting disruption: "
+          + ", ".join(d.isoformat() for d in year.missing_operating_dates))
+    claim = thin.verify_claim(coffee_now.forecast_id, 30, "established")
+    print(f"  a claim of 'established' confidence for coffee at 30 "
+          f"days is refused as a contradiction: {claim[0]}")
+    print(f"  re-performance of every stored thin-data assessment: "
+          f"{len(thin.verify_all())} problems")
+
+    intake = IntakeService(store)
+    entry = intake.enter(
+        commodity="coffee", market="bengaluru",
+        obs_date=date(2025, 12, 29), driver="modal_price",
+        value=34100.0, entered_by="d.assist",
+        entered_by_role="desk_assistant",
+        entered_at=_datetime(2025, 12, 29, 18, 0),
+        source_note="phoned in by the Bengaluru market contact",
+    )
+    before = store.series(
+        "coffee", "bengaluru", "modal_price",
+        date(2025, 12, 29), date(2025, 12, 29),
+    )
+    print(f"  intake entry {entry.entry_id}: a coffee price phoned "
+          f"in for Monday 2025-12-29 sits pending — engine reads "
+          f"at its key see {len(before)} observation(s), because a "
+          "pending entry is not a fact")
+    try:
+        intake.confirm(
+            entry.entry_id, checker="d.assist",
+            checker_role="desk_head",
+            acted_at=_datetime(2025, 12, 29, 18, 30),
+        )
+        print("  UNEXPECTED: the self-check was accepted")
+    except Exception as exc:
+        print(f"  the enterer checking their own entry is refused: "
+              f"{exc}")
+    act = intake.confirm(
+        entry.entry_id, checker="r.menon", checker_role="desk_head",
+        acted_at=_datetime(2025, 12, 29, 19, 0),
+        note="corroborated with the market contact",
+    )
+    after = store.series(
+        "coffee", "bengaluru", "modal_price",
+        date(2025, 12, 29), date(2025, 12, 29),
+    )
+    view = intake.entry_view(entry.entry_id)
+    print(f"  check act {act.act_id}: r.menon confirmed it — "
+          f"exactly {len(after)} observation now stands at the "
+          f"key ({after[0].value} INR/quintal), its provenance "
+          f"naming entered_by "
+          f"{view['provenance']['entered_by']} and confirmed_by "
+          f"{view['provenance']['confirmed_by']}")
+    print(f"  chain re-performance over every intake entry: "
+          f"{len(intake.verify_all())} problems")
     print(f"sealed truth rows stored: {truth_store.count()} (readable only via the truth store)")
     return 0
 
