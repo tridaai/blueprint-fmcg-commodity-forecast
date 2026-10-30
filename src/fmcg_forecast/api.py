@@ -39,7 +39,7 @@ rows behind it.
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -109,6 +109,12 @@ from fmcg_forecast.scenarios.service import (
 from fmcg_forecast.sentiment.service import (
     SentimentConflictError,
     SentimentService,
+)
+from fmcg_forecast.ingest.pack import load_ingest_pack
+from fmcg_forecast.ingest.service import (
+    IngestNotFoundError,
+    IngestService,
+    IngestValidationError,
 )
 from fmcg_forecast.intake.service import (
     IntakeNotFoundError,
@@ -284,6 +290,57 @@ class IntakeCheckRequest(BaseModel):
     note: str = ""
 
 
+class RegisterSourceRequest(BaseModel):
+    source_id: str
+    kind: str
+    display: str
+    owner: str
+    cadence: str
+    drivers: list[str]
+    licence_note: str
+    registered_by: str
+    registered_by_role: str
+    at: datetime | None = None
+
+
+class LoadFileRequest(BaseModel):
+    source_id: str
+    csv_text: str
+    as_of: date | None = None
+    kind: str = "file_drop"
+    received_by: str
+    at: datetime | None = None
+
+
+class LoadPushRequest(BaseModel):
+    source_id: str
+    rows: list[dict]
+    as_of: date | None = None
+    received_by: str
+    at: datetime | None = None
+
+
+class CorrectRequest(BaseModel):
+    commodity: str
+    market: str
+    obs_date: date
+    driver: str
+    value: float
+    reason: str
+    corrected_by: str
+    corrected_by_role: str
+    at: datetime | None = None
+    corrects_quarantine_id: str | None = None
+
+
+class ReplayRequest(BaseModel):
+    commodity: str
+    market: str
+    origins: list[date]
+    replayed_by: str
+    at: datetime | None = None
+
+
 def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     model_port = model or OfflineModel()
     sentiment = SentimentService(store, model_port)
@@ -310,9 +367,10 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     alert_service = AlertService(store)
     thin_service = ThinDataService(store)
     intake_service = IntakeService(store)
+    ingest_service = IngestService(store)
     app = FastAPI(
         title="FMCG Commodity Forecast — Operations API",
-        version="0.10.0",
+        version="0.11.0",
         description="Read surfaces for the commodity price & driver store, "
         "the governed forecast surface, the backtest/accuracy surface, "
         "the sentiment surface, the event registry, the scenario "
@@ -323,7 +381,9 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
         "escalation clock, the thin-data surface: multi-window "
         "assessments and per-horizon confidence tiers, and the "
         "assisted intake surface: phoned-in figures under "
-        "maker–checker.",
+        "maker–checker, and the production data plane: the "
+        "source registry, connector loads with quarantine and "
+        "provenance, correction overlays, and backfill replay.",
     )
 
     @app.middleware("http")
@@ -1443,5 +1503,144 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
         except IntakeNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"entry_id": entry_id, "problems": problems}
+
+    # -- production data plane (R11, F20-DI1/DI2/DI4) --------------------
+
+    @app.get("/ingest/pack")
+    def ingest_pack() -> dict:
+        return load_ingest_pack().model_dump(mode="json")
+
+    @app.get("/ingest/sources")
+    def list_ingest_sources() -> dict:
+        return {
+            "sources": [
+                s.model_dump(mode="json") for s in ingest_service.list_sources()
+            ]
+        }
+
+    @app.post("/ingest/sources", status_code=201)
+    def register_ingest_source(body: RegisterSourceRequest) -> dict:
+        try:
+            registration = ingest_service.register_source(
+                body.source_id,
+                body.kind,
+                body.display,
+                body.owner,
+                body.cadence,
+                body.drivers,
+                body.licence_note,
+                body.registered_by,
+                body.registered_by_role,
+                body.at or datetime.now(timezone.utc),
+            )
+        except IngestValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return registration.model_dump(mode="json")
+
+    @app.post("/ingest/batches/file", status_code=201)
+    def load_ingest_file(body: LoadFileRequest) -> dict:
+        try:
+            batch = ingest_service.load_file_drop(
+                body.source_id,
+                body.csv_text,
+                as_of=body.as_of,
+                received_by=body.received_by,
+                received_at=body.at or datetime.now(timezone.utc),
+                connector_kind=body.kind,
+            )
+        except IngestValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return ingest_service.batch_view(batch.batch_id)
+
+    @app.post("/ingest/batches/push", status_code=201)
+    def load_ingest_push(body: LoadPushRequest) -> dict:
+        try:
+            batch = ingest_service.load_api_push(
+                body.source_id,
+                body.rows,
+                as_of=body.as_of,
+                received_by=body.received_by,
+                received_at=body.at or datetime.now(timezone.utc),
+            )
+        except IngestValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return ingest_service.batch_view(batch.batch_id)
+
+    @app.get("/ingest/batches")
+    def list_ingest_batches(source: str | None = None) -> dict:
+        return {
+            "batches": [
+                b.model_dump(mode="json")
+                for b in ingest_service.list_batches(source)
+            ]
+        }
+
+    @app.get("/ingest/batches/{batch_id}")
+    def get_ingest_batch(batch_id: str) -> dict:
+        try:
+            return ingest_service.batch_view(batch_id)
+        except IngestNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/ingest/quarantine")
+    def list_ingest_quarantine(batch: str | None = None) -> dict:
+        return {
+            "quarantine": [
+                r.model_dump(mode="json")
+                for r in ingest_service.list_quarantine(batch_id=batch)
+            ]
+        }
+
+    @app.post("/ingest/corrections", status_code=201)
+    def create_ingest_correction(body: CorrectRequest) -> dict:
+        try:
+            correction = ingest_service.correct(
+                body.commodity,
+                body.market,
+                body.obs_date,
+                body.driver,
+                body.value,
+                reason=body.reason,
+                corrected_by=body.corrected_by,
+                corrected_by_role=body.corrected_by_role,
+                corrected_at=body.at or datetime.now(timezone.utc),
+                corrects_quarantine_id=body.corrects_quarantine_id,
+            )
+        except IngestNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except IngestValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return correction.model_dump(mode="json")
+
+    @app.get("/ingest/corrections")
+    def list_ingest_corrections(
+        commodity: str, market: str, obs_date: date, driver: str
+    ) -> dict:
+        chain = ingest_service.correction_chain(commodity, market, obs_date, driver)
+        return {"corrections": [c.model_dump(mode="json") for c in chain]}
+
+    @app.get("/ingest/effective")
+    def get_ingest_effective(
+        commodity: str, market: str, obs_date: date, driver: str
+    ) -> dict:
+        return ingest_service.effective_fact(commodity, market, obs_date, driver)
+
+    @app.post("/ingest/backfill/replay", status_code=201)
+    def create_backfill_replay(body: ReplayRequest) -> dict:
+        try:
+            replay = ingest_service.replay_backtests(
+                body.commodity,
+                body.market,
+                body.origins,
+                replayed_by=body.replayed_by,
+                replayed_at=body.at or datetime.now(timezone.utc),
+            )
+        except IngestValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return replay.model_dump(mode="json")
+
+    @app.get("/ingest/verify")
+    def verify_ingest() -> dict:
+        return {"problems": ingest_service.verify_all()}
 
     return app
