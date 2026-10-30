@@ -44,6 +44,15 @@ from fmcg_forecast.scenarios.models import (
     ScenarioRequest,
     ScenarioRun,
 )
+from fmcg_forecast.ingest.models import (
+    BackfillReplay,
+    CandidateRow,
+    Correction,
+    IngestBatch,
+    ProvenanceRow,
+    QuarantineRecord,
+    SourceRegistration,
+)
 from fmcg_forecast.intake.models import IntakeCheckAct, IntakeEntry
 from fmcg_forecast.signals.models import BuySignal
 from fmcg_forecast.thin.models import ThinAssessment
@@ -227,6 +236,49 @@ class Store(Protocol):
     def list_intake_check_acts(
         self, entry_id: str | None = None
     ) -> list[IntakeCheckAct]: ...
+    # -- production data plane (R11) ------------------------------------
+    def insert_ingest_source(self, registration: SourceRegistration) -> None: ...
+    def get_ingest_source(self, source_id: str) -> SourceRegistration | None: ...
+    def list_ingest_sources(self) -> list[SourceRegistration]: ...
+    def insert_ingest_batch(self, batch: IngestBatch) -> None: ...
+    def get_ingest_batch(self, batch_id: str) -> IngestBatch | None: ...
+    def list_ingest_batches(
+        self, source_id: str | None = None
+    ) -> list[IngestBatch]: ...
+    def insert_ingest_candidates(
+        self, batch_id: str, rows: list[CandidateRow]
+    ) -> None: ...
+    def list_ingest_candidates(self, batch_id: str) -> list[CandidateRow]: ...
+    def insert_quarantine_record(self, record: QuarantineRecord) -> None: ...
+    def get_quarantine_record(
+        self, quarantine_id: str
+    ) -> QuarantineRecord | None: ...
+    def list_quarantine_records(
+        self, batch_id: str | None = None
+    ) -> list[QuarantineRecord]: ...
+    def insert_provenance(self, rows: list[ProvenanceRow]) -> None: ...
+    def get_provenance(
+        self, commodity: str, market: str, obs_date: date, driver: str
+    ) -> ProvenanceRow | None: ...
+    def list_provenance(
+        self,
+        batch_id: str | None = None,
+        source_id: str | None = None,
+    ) -> list[ProvenanceRow]: ...
+    def insert_correction(self, correction: Correction) -> None: ...
+    def get_correction(self, correction_id: str) -> Correction | None: ...
+    def list_corrections(
+        self,
+        commodity: str | None = None,
+        market: str | None = None,
+        obs_date: date | None = None,
+        driver: str | None = None,
+    ) -> list[Correction]: ...
+    def insert_backfill_replay(self, replay: BackfillReplay) -> None: ...
+    def get_backfill_replay(self, replay_id: str) -> BackfillReplay | None: ...
+    def list_backfill_replays(
+        self, commodity: str | None = None, market: str | None = None
+    ) -> list[BackfillReplay]: ...
     def close(self) -> None: ...
 
 
@@ -1662,6 +1714,325 @@ class SqlStore:
         cur = self._conn.execute(self._q(sql), params)
         return [
             IntakeCheckAct.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    # -- production data plane (R11) -----------------------------------
+    # Registry entries, batches, candidate rows, quarantine
+    # records, corrections and replays are insert-only, like
+    # every other artefact: the services check the content
+    # address before inserting, so a replayed delivery or a
+    # re-entered act is a no-op rather than a duplicate-write
+    # error. Provenance rows are written once per landed
+    # observation, in the same act that lands it.
+
+    def insert_ingest_source(self, registration: SourceRegistration) -> None:
+        sql = self._q(
+            "INSERT INTO ingest_sources (source_id, payload) VALUES (?, ?)"
+        )
+        self._conn.execute(
+            sql, (registration.source_id, registration.model_dump_json())
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_ingest_source(self, source_id: str) -> SourceRegistration | None:
+        cur = self._conn.execute(
+            self._q("SELECT payload FROM ingest_sources WHERE source_id = ?"),
+            (source_id,),
+        )
+        row = cur.fetchone()
+        return SourceRegistration.model_validate(json.loads(row[0])) if row else None
+
+    def list_ingest_sources(self) -> list[SourceRegistration]:
+        cur = self._conn.execute(
+            "SELECT payload FROM ingest_sources ORDER BY source_id"
+        )
+        return [
+            SourceRegistration.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    def insert_ingest_batch(self, batch: IngestBatch) -> None:
+        sql = self._q(
+            "INSERT INTO ingest_batches (batch_id, source_id, status, "
+            "payload) VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                batch.batch_id,
+                batch.source_id,
+                batch.status,
+                batch.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_ingest_batch(self, batch_id: str) -> IngestBatch | None:
+        cur = self._conn.execute(
+            self._q("SELECT payload FROM ingest_batches WHERE batch_id = ?"),
+            (batch_id,),
+        )
+        row = cur.fetchone()
+        return IngestBatch.model_validate(json.loads(row[0])) if row else None
+
+    def list_ingest_batches(
+        self, source_id: str | None = None
+    ) -> list[IngestBatch]:
+        sql = "SELECT payload FROM ingest_batches"
+        params: list = []
+        if source_id is not None:
+            sql += " WHERE source_id = ?"
+            params.append(source_id)
+        sql += " ORDER BY source_id, batch_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [IngestBatch.model_validate(json.loads(r[0])) for r in cur.fetchall()]
+
+    def insert_ingest_candidates(
+        self, batch_id: str, rows: list[CandidateRow]
+    ) -> None:
+        sql = self._q(
+            "INSERT INTO ingest_candidates (batch_id, row_index, payload) "
+            "VALUES (?, ?, ?)"
+        )
+        self._conn.executemany(
+            sql,
+            [(batch_id, r.row_index, r.model_dump_json()) for r in rows],
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def list_ingest_candidates(self, batch_id: str) -> list[CandidateRow]:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM ingest_candidates WHERE batch_id = ? "
+                "ORDER BY row_index"
+            ),
+            (batch_id,),
+        )
+        return [CandidateRow.model_validate(json.loads(r[0])) for r in cur.fetchall()]
+
+    def insert_quarantine_record(self, record: QuarantineRecord) -> None:
+        sql = self._q(
+            "INSERT INTO ingest_quarantine (quarantine_id, batch_id, "
+            "row_index, payload) VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                record.quarantine_id,
+                record.batch_id,
+                record.row_index,
+                record.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_quarantine_record(
+        self, quarantine_id: str
+    ) -> QuarantineRecord | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM ingest_quarantine WHERE quarantine_id = ?"
+            ),
+            (quarantine_id,),
+        )
+        row = cur.fetchone()
+        return QuarantineRecord.model_validate(json.loads(row[0])) if row else None
+
+    def list_quarantine_records(
+        self, batch_id: str | None = None
+    ) -> list[QuarantineRecord]:
+        sql = "SELECT payload FROM ingest_quarantine"
+        params: list = []
+        if batch_id is not None:
+            sql += " WHERE batch_id = ?"
+            params.append(batch_id)
+        sql += " ORDER BY batch_id, row_index"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            QuarantineRecord.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    def insert_provenance(self, rows: list[ProvenanceRow]) -> None:
+        sql = self._q(
+            "INSERT INTO observation_provenance (commodity, market, "
+            "obs_date, driver, source_id, batch_id, row_index) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)"
+        )
+        self._conn.executemany(
+            sql,
+            [
+                (
+                    r.commodity,
+                    r.market,
+                    self._date_param(r.obs_date),
+                    r.driver,
+                    r.source_id,
+                    r.batch_id,
+                    r.row_index,
+                )
+                for r in rows
+            ],
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_provenance(
+        self, commodity: str, market: str, obs_date: date, driver: str
+    ) -> ProvenanceRow | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT commodity, market, obs_date, driver, source_id, "
+                "batch_id, row_index FROM observation_provenance "
+                "WHERE commodity = ? AND market = ? AND obs_date = ? "
+                "AND driver = ?"
+            ),
+            (commodity, market, self._date_param(obs_date), driver),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return ProvenanceRow(
+            commodity=row[0], market=row[1], obs_date=_as_date(row[2]),
+            driver=row[3], source_id=row[4], batch_id=row[5],
+            row_index=int(row[6]),
+        )
+
+    def list_provenance(
+        self,
+        batch_id: str | None = None,
+        source_id: str | None = None,
+    ) -> list[ProvenanceRow]:
+        sql = (
+            "SELECT commodity, market, obs_date, driver, source_id, "
+            "batch_id, row_index FROM observation_provenance"
+        )
+        clauses, params = [], []
+        if batch_id is not None:
+            clauses.append("batch_id = ?")
+            params.append(batch_id)
+        if source_id is not None:
+            clauses.append("source_id = ?")
+            params.append(source_id)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY commodity, market, obs_date, driver"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            ProvenanceRow(
+                commodity=r[0], market=r[1], obs_date=_as_date(r[2]),
+                driver=r[3], source_id=r[4], batch_id=r[5],
+                row_index=int(r[6]),
+            )
+            for r in cur.fetchall()
+        ]
+
+    def insert_correction(self, correction: Correction) -> None:
+        sql = self._q(
+            "INSERT INTO ingest_corrections (correction_id, commodity, "
+            "market, obs_date, driver, payload) "
+            "VALUES (?, ?, ?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                correction.correction_id,
+                correction.commodity,
+                correction.market,
+                self._date_param(correction.obs_date),
+                correction.driver,
+                correction.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_correction(self, correction_id: str) -> Correction | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM ingest_corrections WHERE correction_id = ?"
+            ),
+            (correction_id,),
+        )
+        row = cur.fetchone()
+        return Correction.model_validate(json.loads(row[0])) if row else None
+
+    def list_corrections(
+        self,
+        commodity: str | None = None,
+        market: str | None = None,
+        obs_date: date | None = None,
+        driver: str | None = None,
+    ) -> list[Correction]:
+        sql = "SELECT payload FROM ingest_corrections"
+        clauses, params = [], []
+        if commodity is not None:
+            clauses.append("commodity = ?")
+            params.append(commodity)
+        if market is not None:
+            clauses.append("market = ?")
+            params.append(market)
+        if obs_date is not None:
+            clauses.append("obs_date = ?")
+            params.append(self._date_param(obs_date))
+        if driver is not None:
+            clauses.append("driver = ?")
+            params.append(driver)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY commodity, market, obs_date, driver, correction_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [Correction.model_validate(json.loads(r[0])) for r in cur.fetchall()]
+
+    def insert_backfill_replay(self, replay: BackfillReplay) -> None:
+        sql = self._q(
+            "INSERT INTO backfill_replays (replay_id, commodity, market, "
+            "payload) VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                replay.replay_id,
+                replay.commodity,
+                replay.market,
+                replay.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_backfill_replay(self, replay_id: str) -> BackfillReplay | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM backfill_replays WHERE replay_id = ?"
+            ),
+            (replay_id,),
+        )
+        row = cur.fetchone()
+        return BackfillReplay.model_validate(json.loads(row[0])) if row else None
+
+    def list_backfill_replays(
+        self, commodity: str | None = None, market: str | None = None
+    ) -> list[BackfillReplay]:
+        sql = "SELECT payload FROM backfill_replays"
+        clauses, params = [], []
+        if commodity is not None:
+            clauses.append("commodity = ?")
+            params.append(commodity)
+        if market is not None:
+            clauses.append("market = ?")
+            params.append(market)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY commodity, market, replay_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            BackfillReplay.model_validate(json.loads(r[0]))
             for r in cur.fetchall()
         ]
 
