@@ -243,6 +243,31 @@ Law 7 depth / F20-DI3), also zero-tolerance:
   problem the intake verifier reports over the eval's
   entries.
 
+Round 11 counters (production data plane, F20-DI1/DI2/DI4),
+also zero-tolerance:
+
+- ingest_quarantine_errors: a planted bad row landing,
+  quarantining with reasons other than exactly its planted
+  ones, or a tampered quarantine record the verifier accepts.
+- ingest_provenance_errors: a connector-landed fact without
+  exactly one provenance row naming its batch and source, or
+  a provenance row naming a missing batch or source.
+- ingest_replay_errors: re-delivering a batch minting a new
+  artefact or landing a row twice, or a later delivery of a
+  landed fact counting as anything but a duplicate.
+- ingest_refusal_errors: a whole-batch refusal (unknown
+  source, unit mismatch, missing as-of, empty delivery) that
+  lands a row, states the wrong reason, or fails to verify.
+- ingest_correction_errors: a correction chain that does not
+  fold to the stated effective value, a stored observation
+  whose landed value moved, a correction answering a
+  quarantined row landing a fact, or any problem the ingest
+  verifier reports over the eval's data plane.
+- ingest_backfill_errors: replayed origins missing from the
+  series' results or its pooled ledger origins, a replay
+  storing a result twice, or a replay artefact the verifier
+  flags.
+
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
 
@@ -282,6 +307,7 @@ def truth_isolation_violations() -> int:
         + list((base / "alerts").rglob("*.py"))
         + list((base / "thin").rglob("*.py"))
         + list((base / "intake").rglob("*.py"))
+        + list((base / "ingest").rglob("*.py"))
     )
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -371,6 +397,12 @@ def main() -> int:
         "intake_unconfirmed_leakage_errors": 0,
         "intake_self_check_errors": 0,
         "intake_chain_errors": 0,
+        "ingest_quarantine_errors": 0,
+        "ingest_provenance_errors": 0,
+        "ingest_replay_errors": 0,
+        "ingest_refusal_errors": 0,
+        "ingest_correction_errors": 0,
+        "ingest_backfill_errors": 0,
     }
 
     # --- planted events, measured seasonally-matched ---------------
@@ -2144,7 +2176,223 @@ def main() -> int:
         counters["intake_unconfirmed_leakage_errors"] += 1
     counters["intake_chain_errors"] += len(_intake.verify_all())
 
-    print("Round 10 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio + R7 prompt-to-dashboard + R8 buy signals & coverage planning + R9 alerting, subscriptions & escalation + R10 thin-data depth & assisted intake)")
+    # --- production data plane (R11, F20-DI1/DI2/DI4) ------------------
+    import sqlite3 as _sqlite3
+
+    from fmcg_forecast.ingest.service import (
+        IngestService as _IngestService,
+    )
+    from fmcg_forecast.ingest.verify import (
+        verify_batch as _verify_ingest_batch,
+    )
+    from fmcg_forecast.ingest.verify import (
+        verify_replay as _verify_replay,
+    )
+
+    _ingest = _IngestService(store)
+    _header = "commodity,market,obs_date,driver,value,unit"
+    _fixture_csv = "\n".join(
+        [
+            _header,
+            "coffee,bengaluru,2025-12-31,modal_price,34100,INR/quintal",
+            "coffee,bengaluru,2025-12-31,arrivals,2600,quintal/day",
+            "coffee,bengaluru,2025-12-31,modal_price,34100,INR/quintal",
+            "coffee,bengaluru,2025-12-24,arrivals,-50,quintal/day",
+            "coffee,bengaluru,2026-03-02,modal_price,35000,INR/quintal",
+            "coffee,bengaluru,2025-12-29,stock_level,80,index (0-160)",
+            "tea,bengaluru,2025-12-29,modal_price,100,INR/quintal",
+            "coffee,chennai,2025-12-29,modal_price,34000,INR/quintal",
+            "coffee,bengaluru,2025-12-30,modal_price,99999,INR/quintal",
+            "coffee,bengaluru,2025-12-24,modal_price,33900,INR/quintal",
+            "coffee,bengaluru,2025-12-24,modal_price,34050,INR/quintal",
+        ]
+    )
+    _batch = _ingest.load_file_drop(
+        "agmarknet_file_drop", _fixture_csv, as_of=_date(2026, 1, 5),
+        received_by="eval.desk", received_at=_datetime(2026, 1, 5, 9, 0),
+    )
+    if (_batch.rows_received, _batch.rows_loaded,
+            _batch.rows_quarantined, _batch.rows_duplicate) != (11, 2, 8, 1):
+        counters["ingest_quarantine_errors"] += 1
+    _expected_reasons = {
+        3: ["value_out_of_range"],
+        4: ["future_date"],
+        5: ["driver_not_reported"],
+        6: ["unknown_commodity"],
+        7: ["unknown_market"],
+        8: ["conflicts_with_landed"],
+        9: ["duplicate_conflicting"],
+        10: ["duplicate_conflicting"],
+    }
+    _actual_reasons = {
+        r.row_index: r.reasons
+        for r in _ingest.list_quarantine(batch_id=_batch.batch_id)
+    }
+    if _actual_reasons != _expected_reasons:
+        counters["ingest_quarantine_errors"] += 1
+    # zero quarantined rows reached the observations table
+    if store.series("coffee", "bengaluru", "modal_price",
+                    _date(2025, 12, 24), _date(2025, 12, 24)):
+        counters["ingest_quarantine_errors"] += 1
+    if store.series("coffee", "bengaluru", "arrivals",
+                    _date(2025, 12, 24), _date(2025, 12, 24)):
+        counters["ingest_quarantine_errors"] += 1
+
+    # provenance: exactly the landed rows, naming batch and source
+    _prov = store.list_provenance(batch_id=_batch.batch_id)
+    if len(_prov) != 2 or {p.source_id for p in _prov} != {"agmarknet_file_drop"}:
+        counters["ingest_provenance_errors"] += 1
+    if {p.row_index for p in _prov} != {0, 1}:
+        counters["ingest_provenance_errors"] += 1
+
+    # replay: the same delivery is the same artefact, landing nothing twice
+    _coffee_prices_before = len(store.series("coffee", "bengaluru", "modal_price"))
+    _replay_batch = _ingest.load_file_drop(
+        "agmarknet_file_drop", _fixture_csv, as_of=_date(2026, 1, 5),
+        received_by="eval.desk", received_at=_datetime(2026, 1, 6, 9, 0),
+    )
+    if _replay_batch.batch_id != _batch.batch_id:
+        counters["ingest_replay_errors"] += 1
+    if len(store.series("coffee", "bengaluru", "modal_price")) != _coffee_prices_before:
+        counters["ingest_replay_errors"] += 1
+
+    # API push: per-row provenance is the price of admission
+    _push = _ingest.load_api_push(
+        "mandi_api_push",
+        [
+            {"commodity": "coffee", "market": "bengaluru",
+             "obs_date": "2025-12-28", "driver": "modal_price",
+             "value": 34300, "unit": "INR/quintal",
+             "source": "mandi_api_push", "as_of": "2026-01-05"},
+            {"commodity": "coffee", "market": "bengaluru",
+             "obs_date": "2025-12-31", "driver": "arrivals",
+             "value": 2500, "unit": "quintal/day", "as_of": "2026-01-05"},
+            {"commodity": "coffee", "market": "bengaluru",
+             "obs_date": "2025-12-28", "driver": "arrivals",
+             "value": 2300, "unit": "quintal/day",
+             "source": "mandi_api_push", "as_of": "2026-01-04"},
+        ],
+        as_of=_date(2026, 1, 5), received_by="eval.feed",
+        received_at=_datetime(2026, 1, 5, 9, 30),
+    )
+    if (_push.rows_loaded, _push.rows_quarantined) != (1, 2):
+        counters["ingest_quarantine_errors"] += 1
+    if {
+        r.row_index: r.reasons
+        for r in _ingest.list_quarantine(batch_id=_push.batch_id)
+    } != {1: ["missing_provenance"], 2: ["missing_provenance"]}:
+        counters["ingest_quarantine_errors"] += 1
+
+    # whole-batch refusals: recorded, reasoned, and landing nothing
+    _prices_before_refusals = len(store.series("coffee", "bengaluru", "modal_price"))
+    for _text, _as_of, _source, _reason in (
+        (_fixture_csv, _date(2026, 1, 5), "no_such_source", "unknown_source"),
+        (_fixture_csv.replace("INR/quintal", "INR/kg"),
+         _date(2026, 1, 5), "agmarknet_file_drop", "unit_mismatch"),
+        (_fixture_csv, None, "agmarknet_file_drop", "batch_missing_provenance"),
+        (_header, _date(2026, 1, 5), "agmarknet_file_drop", "empty_batch"),
+    ):
+        _refused = _ingest.load_file_drop(
+            _source, _text, as_of=_as_of, received_by="eval.desk",
+            received_at=_datetime(2026, 1, 5, 10, 0),
+        )
+        if _refused.status != "refused" or _refused.refusal_reason != _reason:
+            counters["ingest_refusal_errors"] += 1
+        if _verify_ingest_batch(store, _refused):
+            counters["ingest_refusal_errors"] += 1
+    if len(store.series("coffee", "bengaluru", "modal_price")) != _prices_before_refusals:
+        counters["ingest_refusal_errors"] += 1
+
+    # corrections: the fold is the effective fact; history stands
+    _c1 = _ingest.correct(
+        "coffee", "bengaluru", _date(2025, 12, 31), "modal_price", 34250.0,
+        reason="transcription slip in the phoned figure",
+        corrected_by="eval.head", corrected_by_role="desk_head",
+        corrected_at=_datetime(2026, 1, 5, 11, 0),
+    )
+    _c2 = _ingest.correct(
+        "coffee", "bengaluru", _date(2025, 12, 31), "modal_price", 34300.0,
+        reason="the market contact corrected the correction",
+        corrected_by="eval.head", corrected_by_role="desk_head",
+        corrected_at=_datetime(2026, 1, 5, 12, 0),
+    )
+    if _c2.supersedes_correction_id != _c1.correction_id:
+        counters["ingest_correction_errors"] += 1
+    _effective = _ingest.effective_fact(
+        "coffee", "bengaluru", _date(2025, 12, 31), "modal_price"
+    )
+    if (
+        _effective["state"] != "corrected"
+        or _effective["landed_value"] != 34100.0
+        or _effective["effective_value"] != 34300.0
+    ):
+        counters["ingest_correction_errors"] += 1
+    _landed = store.series("coffee", "bengaluru", "modal_price",
+                           _date(2025, 12, 31), _date(2025, 12, 31))
+    if len(_landed) != 1 or _landed[0].value != 34100.0:
+        counters["ingest_correction_errors"] += 1
+    _q3 = next(
+        r for r in _ingest.list_quarantine(batch_id=_batch.batch_id)
+        if r.row_index == 3
+    )
+    _ingest.correct(
+        "coffee", "bengaluru", _date(2025, 12, 24), "arrivals", 2450.0,
+        reason="the minus was a stray keystroke on the phoned figure",
+        corrected_by="eval.head", corrected_by_role="desk_head",
+        corrected_at=_datetime(2026, 1, 5, 12, 30),
+        corrects_quarantine_id=_q3.quarantine_id,
+    )
+    _q_effective = _ingest.effective_fact(
+        "coffee", "bengaluru", _date(2025, 12, 24), "arrivals"
+    )
+    if _q_effective["state"] != "quarantine_corrected":
+        counters["ingest_correction_errors"] += 1
+    if store.series("coffee", "bengaluru", "arrivals",
+                    _date(2025, 12, 24), _date(2025, 12, 24)):
+        counters["ingest_correction_errors"] += 1
+    counters["ingest_correction_errors"] += len(_ingest.verify_all())
+
+    # backfill replay: origins the grid never ran earn their
+    # place in the series' results and its pooled ledger
+    _replay = _ingest.replay_backtests(
+        "cumin", "unjha",
+        [_date(2025, 1, 15), _date(2025, 2, 15), _date(2025, 3, 15)],
+        replayed_by="eval.desk", replayed_at=_datetime(2026, 1, 5, 13, 0),
+    )
+    if _replay.results_stored != 9 or _replay.skipped:
+        counters["ingest_backfill_errors"] += 1
+    _record30 = store.get_accuracy_record("cumin", "unjha", 30)
+    if _record30 is None or _date(2025, 3, 15) not in _record30.origins:
+        counters["ingest_backfill_errors"] += 1
+    if _verify_replay(store, _replay):
+        counters["ingest_backfill_errors"] += 1
+    _replay2 = _ingest.replay_backtests(
+        "cumin", "unjha",
+        [_date(2025, 1, 15), _date(2025, 2, 15), _date(2025, 3, 15)],
+        replayed_by="eval.desk", replayed_at=_datetime(2026, 1, 5, 14, 0),
+    )
+    if _replay2.results_stored != 0 or _replay2.results_already_on_record != 9:
+        counters["ingest_backfill_errors"] += 1
+
+    # tamper: a quarantine record altered in place is caught
+    _conn = _sqlite3.connect(str(tmp / "evals.db"))
+    _payload = json.loads(
+        _conn.execute(
+            "SELECT payload FROM ingest_quarantine WHERE quarantine_id = ?",
+            (_q3.quarantine_id,),
+        ).fetchone()[0]
+    )
+    _payload["reasons"] = ["future_date"]
+    _conn.execute(
+        "UPDATE ingest_quarantine SET payload = ? WHERE quarantine_id = ?",
+        (json.dumps(_payload), _q3.quarantine_id),
+    )
+    _conn.commit()
+    _conn.close()
+    if not _verify_ingest_batch(store, _batch):
+        counters["ingest_quarantine_errors"] += 1
+
+    print("Round 11 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio + R7 prompt-to-dashboard + R8 buy signals & coverage planning + R9 alerting, subscriptions & escalation + R10 thin-data depth & assisted intake + R11 production data plane)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]
