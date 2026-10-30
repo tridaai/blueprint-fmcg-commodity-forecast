@@ -268,6 +268,31 @@ also zero-tolerance:
   storing a result twice, or a replay artefact the verifier
   flags.
 
+Round 12 counters (forecast-ops analytics, F20-AM1 + planted
+shock grading), also zero-tolerance:
+
+- analytics_reperformance_errors: a stored ops report the
+  re-performance verifier flags, or a tampered report payload
+  it accepts.
+- analytics_trend_errors: a trend row whose early/late pooled
+  figures, direction or windows disagree with an independent
+  recomputation from the stored results, a series with enough
+  origins named insufficient, or a ledger pin that does not
+  resolve to the ledger of record.
+- analytics_signal_outcome_errors: a grid outcome whose
+  realised drift, move or verdict disagrees with the observed
+  prices, a strikable origin missing its outcome row, an
+  engine refusal not named as a skip, or a desk signal graded
+  before its horizon landed (or left pending after it did).
+- analytics_transmission_errors: a class row whose measurable
+  set, error aggregates or verified counts disagree with the
+  measurement layer's own verdicts, or a small sample not
+  named as such on the row and the report's face.
+- analytics_shock_window_errors: a shock row whose day pools
+  disagree with an independent split of the stored scored
+  days at the event's window, or the planted 2024 export
+  ban — never inside a scored window — graded anywhere.
+
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
 
@@ -308,6 +333,7 @@ def truth_isolation_violations() -> int:
         + list((base / "thin").rglob("*.py"))
         + list((base / "intake").rglob("*.py"))
         + list((base / "ingest").rglob("*.py"))
+        + list((base / "analytics").rglob("*.py"))
     )
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -403,6 +429,11 @@ def main() -> int:
         "ingest_refusal_errors": 0,
         "ingest_correction_errors": 0,
         "ingest_backfill_errors": 0,
+        "analytics_reperformance_errors": 0,
+        "analytics_trend_errors": 0,
+        "analytics_signal_outcome_errors": 0,
+        "analytics_transmission_errors": 0,
+        "analytics_shock_window_errors": 0,
     }
 
     # --- planted events, measured seasonally-matched ---------------
@@ -2394,7 +2425,245 @@ def main() -> int:
     if not _verify_ingest_batch(store, _batch):
         counters["ingest_quarantine_errors"] += 1
 
-    print("Round 11 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio + R7 prompt-to-dashboard + R8 buy signals & coverage planning + R9 alerting, subscriptions & escalation + R10 thin-data depth & assisted intake + R11 production data plane)")
+    # --- forecast-ops analytics (R12, F20-AM1 + shock grading) -----------
+    from fmcg_forecast.analytics.service import (
+        AnalyticsService as _AnalyticsService,
+    )
+    from fmcg_forecast.analytics.verify import (
+        verify_report as _verify_ops_report,
+    )
+    from fmcg_forecast.backtest import metrics as _ametrics
+    from fmcg_forecast.events.measure import (
+        measure_event_effect as _measure_event,
+    )
+    from fmcg_forecast.events.pack import (
+        load_event_pack as _load_event_pack,
+    )
+
+    _analytics = _AnalyticsService(store)
+    _ops = _analytics.build_report()
+
+    # trends: every row re-pooled independently from the
+    # stored results, by the ledger's own pooling rule
+    def _pool_sums(_rs):
+        _se = round(sum(r.sum_err for r in _rs), _ametrics.SUM_DP)
+        _sae = round(sum(r.sum_abs_err for r in _rs), _ametrics.SUM_DP)
+        _sap = round(sum(r.sum_abs_pct for r in _rs), _ametrics.SUM_DP)
+        _cov = sum(r.covered_days for r in _rs)
+        _n = sum(r.n_days for r in _rs)
+        return _ametrics._derive(_se, _sae, _sap, _cov, _n)
+
+    for _row in _ops.trends:
+        _results = sorted(
+            store.list_backtest_results(
+                _row.commodity, _row.market, _row.horizon_days
+            ),
+            key=lambda r: r.origin,
+        )
+        if len(_results) != _row.n_results:
+            counters["analytics_trend_errors"] += 1
+            continue
+        _record = store.get_accuracy_record(
+            _row.commodity, _row.market, _row.horizon_days
+        )
+        if (_record.record_id if _record else None) != _row.ledger_record_id:
+            counters["analytics_trend_errors"] += 1
+        if len(_results) < 6:
+            if (
+                _row.direction != "insufficient_history"
+                or _row.delta_mape_pp is not None
+                or _row.early_origins or _row.late_origins
+            ):
+                counters["analytics_trend_errors"] += 1
+            continue
+        _early = _pool_sums(_results[:3])
+        _late = _pool_sums(_results[-3:])
+        _delta = round(_late["mape"] - _early["mape"], 4)
+        _direction = (
+            "worsening" if _delta > 0.25
+            else "improving" if _delta < -0.25
+            else "steady"
+        )
+        if (
+            _row.direction != _direction
+            or _row.early_mape != _early["mape"]
+            or _row.late_mape != _late["mape"]
+            or _row.delta_mape_pp != _delta
+            or _row.early_origins != [r.origin for r in _results[:3]]
+            or _row.late_origins != [r.origin for r in _results[-3:]]
+        ):
+            counters["analytics_trend_errors"] += 1
+
+    # signal outcomes: every row re-measured against the
+    # observed prices inside its own horizon window
+    def _check_outcome(_row):
+        _window = store.series(
+            _row.commodity, _row.market, "modal_price",
+            _row.as_of + timedelta(days=1),
+            _row.as_of + timedelta(days=_row.horizon_days),
+        )
+        if not _window:
+            return (
+                _row.state == "pending"
+                and _row.favourable is None
+                and _row.move is None
+            )
+        _realised = _window[-1]
+        _drift = round(
+            (float(_realised.value) - _row.spot_inr) / _row.spot_inr * 100, 4
+        )
+        _move = (
+            "rose" if _drift >= 2.0
+            else "fell" if _drift <= -2.0
+            else "flat"
+        )
+        _fav = (
+            _move == "rose" if _row.value == "buy_now"
+            else _move in ("rose", "flat") if _row.value == "phased"
+            else _move in ("fell", "flat")
+        )
+        return (
+            _row.state == "graded"
+            and _row.realised_date == _realised.obs_date
+            and _row.realised_drift_pct == _drift
+            and _row.drift_error_pct == round(_drift - _row.predicted_drift_pct, 4)
+            and _row.move == _move
+            and _row.favourable == _fav
+        )
+
+    _grid_rows = [
+        r for r in _ops.signal_outcomes if r.population == "backtest_grid"
+    ]
+    _desk_rows = [
+        r for r in _ops.signal_outcomes if r.population == "desk"
+    ]
+    if len(_grid_rows) != 135:
+        counters["analytics_signal_outcome_errors"] += 1
+    if len(_ops.origin_signal_skips) != 5 or {
+        s.commodity for s in _ops.origin_signal_skips
+    } != {"coffee"}:
+        counters["analytics_signal_outcome_errors"] += 1
+    if len(_desk_rows) != len(store.list_buy_signals()):
+        counters["analytics_signal_outcome_errors"] += 1
+    for _row in _ops.signal_outcomes:
+        if not _check_outcome(_row):
+            counters["analytics_signal_outcome_errors"] += 1
+
+    # transmission: every class row re-measured through the
+    # events layer's own measurement
+    _epack = _load_event_pack()
+    for _row in _ops.transmission:
+        _members = [
+            e for e in store.list_market_events()
+            if e.event_class == _row.event_class
+        ]
+        _verdicts = [(e, _measure_event(store, e, _epack)) for e in _members]
+        _meas = [
+            (e, v) for e, v in _verdicts
+            if v.status != "not_measurable" and v.measured_log_effect is not None
+        ]
+        if (
+            _row.n_events != len(_members)
+            or _row.n_measurable != len(_meas)
+            or _row.measurable_event_ids != [e.event_id for e, _ in _meas]
+            or _row.verified_count
+            != sum(1 for _, v in _meas if v.status == "verified")
+            or _row.unverified_count
+            != sum(1 for _, v in _meas if v.status == "unverified")
+        ):
+            counters["analytics_transmission_errors"] += 1
+            continue
+        if _meas:
+            _signed = [
+                round(
+                    v.measured_log_effect
+                    - e.transmission.peak_log_price_effect,
+                    4,
+                )
+                for e, v in _meas
+            ]
+            if _row.mean_signed_error != round(sum(_signed) / len(_signed), 4):
+                counters["analytics_transmission_errors"] += 1
+            if _row.mean_abs_error != round(
+                sum(abs(s) for s in _signed) / len(_signed), 4
+            ):
+                counters["analytics_transmission_errors"] += 1
+        _expected_state = (
+            "no_measurable_events" if not _meas
+            else "small_sample" if len(_meas) < 3
+            else "evidence"
+        )
+        if _row.sample_state != _expected_state:
+            counters["analytics_transmission_errors"] += 1
+    if not {
+        "tariff_change", "export_restriction", "weather_shock"
+    } <= set(_ops.small_sample_classes):
+        counters["analytics_transmission_errors"] += 1
+
+    # shock windows: every row's pools re-split independently
+    # from the stored scored days at the event's window
+    for _row in _ops.shock_windows:
+        _event = store.get_market_event(_row.event_id)
+        _prices = store.series(_row.commodity, _row.market, "modal_price")
+        if _event.window_end is not None:
+            _shock_end = _event.window_end + timedelta(days=_event.decay_days)
+        else:
+            _shock_end = _prices[-1].obs_date
+        _results = store.list_backtest_results(
+            _row.commodity, _row.market, _row.horizon_days
+        )
+
+        def _split(_keep):
+            _day_rows, _realised = [], {}
+            for _res in _results:
+                for _day in _res.days:
+                    if _keep(_day.forecast_date):
+                        _day_rows.append(
+                            (_day.forecast_date, _day.p10, _day.p50, _day.p90)
+                        )
+                        _realised[_day.forecast_date] = _day.realised
+            return _ametrics.score_days(_day_rows, _realised)[1]
+
+        _shock = _split(
+            lambda d: _event.window_start <= d <= _shock_end
+        )
+        _rest = _split(
+            lambda d: not (_event.window_start <= d <= _shock_end)
+        )
+        if (
+            _row.shock_n_days != _shock["n_days"]
+            or _row.rest_n_days != _rest["n_days"]
+            or (_shock["n_days"] and _row.shock_mape != _shock["mape"])
+            or (_rest["n_days"] and _row.rest_mape != _rest["mape"])
+        ):
+            counters["analytics_shock_window_errors"] += 1
+        if _event.origin == "historical" and _event.event_class == "export_restriction":
+            if _row.state != "no_shock_window_days" or _row.shock_n_days != 0:
+                counters["analytics_shock_window_errors"] += 1
+
+    # re-performance: the clean report verifies; a tampered
+    # payload does not
+    counters["analytics_reperformance_errors"] += len(
+        _verify_ops_report(store, _ops)
+    )
+    _conn = _sqlite3.connect(str(tmp / "evals.db"))
+    _payload = _json.loads(
+        _conn.execute(
+            "SELECT payload FROM ops_reports WHERE report_id = ?",
+            (_ops.report_id,),
+        ).fetchone()[0]
+    )
+    _payload["trends"][0]["late_mape"] = 99.0
+    _conn.execute(
+        "UPDATE ops_reports SET payload = ? WHERE report_id = ?",
+        (_json.dumps(_payload), _ops.report_id),
+    )
+    _conn.commit()
+    _conn.close()
+    if not _verify_ops_report(store, store.get_ops_report(_ops.report_id)):
+        counters["analytics_reperformance_errors"] += 1
+
+    print("Round 12 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio + R7 prompt-to-dashboard + R8 buy signals & coverage planning + R9 alerting, subscriptions & escalation + R10 thin-data depth & assisted intake + R11 production data plane + R12 forecast-ops analytics & shock grading)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]
