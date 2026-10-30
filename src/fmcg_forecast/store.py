@@ -313,6 +313,12 @@ class SqlStore:
     def _date_param(self, value: date):
         return value if self.dialect == "postgres" else value.isoformat()
 
+    def _executemany(self, sql: str, params) -> None:
+        # psycopg3 connections have no executemany (cursors do);
+        # sqlite3 cursors carry it too, so the cursor is the
+        # dialect-neutral surface for batch inserts.
+        self._conn.cursor().executemany(sql, params)
+
     # -- schema --------------------------------------------------------
     def migrate(self) -> list[str]:
         return apply_migrations(self._conn, self.dialect, self._ph)
@@ -323,7 +329,7 @@ class SqlStore:
             "INSERT INTO observations (commodity, market, obs_date, driver, value) "
             "VALUES (?, ?, ?, ?, ?)"
         )
-        self._conn.executemany(
+        self._executemany(
             sql,
             [
                 (r.commodity, r.market, self._date_param(r.obs_date), r.driver, r.value)
@@ -340,7 +346,7 @@ class SqlStore:
             "magnitude, decay_days, transmission, description) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
-        self._conn.executemany(
+        self._executemany(
             sql,
             [
                 (
@@ -703,7 +709,7 @@ class SqlStore:
             "INSERT INTO sentiment_items (item_id, commodity, item_date, "
             "source, headline) VALUES (?, ?, ?, ?, ?)"
         )
-        self._conn.executemany(
+        self._executemany(
             sql,
             [
                 (
@@ -1797,7 +1803,7 @@ class SqlStore:
             "INSERT INTO ingest_candidates (batch_id, row_index, payload) "
             "VALUES (?, ?, ?)"
         )
-        self._conn.executemany(
+        self._executemany(
             sql,
             [(batch_id, r.row_index, r.model_dump_json()) for r in rows],
         )
@@ -1864,7 +1870,7 @@ class SqlStore:
             "obs_date, driver, source_id, batch_id, row_index) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)"
         )
-        self._conn.executemany(
+        self._executemany(
             sql,
             [
                 (

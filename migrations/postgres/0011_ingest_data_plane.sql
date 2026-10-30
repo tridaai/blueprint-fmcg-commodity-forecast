@@ -47,7 +47,7 @@ CREATE INDEX idx_ingest_quarantine_batch
 CREATE TABLE observation_provenance (
     commodity   TEXT NOT NULL,
     market      TEXT NOT NULL,
-    obs_date    TEXT NOT NULL,
+    obs_date    DATE NOT NULL,
     driver      TEXT NOT NULL,
     source_id   TEXT NOT NULL,
     batch_id    TEXT NOT NULL,
@@ -62,7 +62,7 @@ CREATE TABLE ingest_corrections (
     correction_id  TEXT PRIMARY KEY,
     commodity      TEXT NOT NULL,
     market         TEXT NOT NULL,
-    obs_date       TEXT NOT NULL,
+    obs_date       DATE NOT NULL,
     driver         TEXT NOT NULL,
     payload        TEXT NOT NULL
 );
