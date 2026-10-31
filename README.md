@@ -1266,6 +1266,95 @@ control.
   instruction in the corpus and watches it quarantined
   while the ministry item beside it passes.
 
+## What Round 18 adds
+
+Cost, usage & service monitoring (F20-AM2 on the
+roadmap) — the layer that answers the operator's three
+questions from artefacts: what did the model cost,
+what did the feeds do, and what is late.
+
+- **The monitoring pack** — a versioned pack
+  (`monitoring/pack.py`, genesis v2026.10.1,
+  fail-closed loader) stating the closed purpose
+  vocabulary (one purpose per model-port method), the
+  token estimator (ceil(characters / 4) over the
+  canonical payload — a stated sizing rule, not a
+  provider's tokenizer count), a reference rate card
+  per profile (pack-stated figures for estimation,
+  never a provider quote or a billed amount), and the
+  freshness window each registry cadence is owed
+  (hourly 3h, daily 36h, weekly 240h; a one-off
+  bootstrap owes no window).
+- **The run ledger** — a recording model port wraps
+  any port and strikes exactly one run record (`RUN-`,
+  migration 0018) per **completed** call: profile,
+  purpose, the SHA-256 of the canonical request and
+  response — **never their text**, so the ledger can
+  re-identify and re-price any call without becoming a
+  second copy of the desk's words — character counts,
+  estimated tokens, and the cost in integer nano-USD.
+  A call that raises strikes no record: the ledger
+  prices work done, and a refusal consumes nothing it
+  prices. The offline profile is **unrated**: its
+  records carry cost None — never zero, because a zero
+  would silently price the call into a total. The API
+  app wraps its port at the factory, so every call the
+  served system makes is ledgered. Records flush to
+  the store in batches (at 64 pending, before any
+  monitoring read, and on close) — the ledger is the
+  store's one high-frequency write, and one commit
+  per call would tax every pipeline run for no
+  reader's benefit; a hard process kill can lose the
+  unflushed tail of fewer than 64 records, stated
+  here rather than discovered later.
+- **The monitoring board** — struck as-of a stated
+  instant (`MON-`), folding only records and batches
+  at or before it. The usage section folds the ledger
+  by profile × purpose; the board's cost total is the
+  **exact sum of the rated records folded**, with
+  unrated calls counted separately and never priced.
+  The freshness section gives every registered source
+  a row — job totals folded from the batch artefacts
+  (batches, refusals, rows received / loaded /
+  quarantined), the last **loaded** batch judged
+  against its cadence window: a source past its window
+  is a **breach, named** on the board's face; a source
+  that has never loaded is named in the never-loaded
+  list on every board, never absent; a refusal is job
+  history, not freshness — a feed whose latest delivery
+  was refused whole has not fed the store, and its
+  verdict still reads from its last loaded batch.
+- **The verifier re-performs everything** — each
+  record's address, estimator figures and pack pricing;
+  each board's full fold at its as-of. A rewritten
+  cost, a purpose outside the vocabulary, a forged
+  address and a board with a quietly dropped breach
+  are each named, and the tamper probes are graded in
+  the eval gate. A board struck before the artefact
+  set moved on names that drift rather than passing
+  silently; the remedy is a newly struck board.
+- **Surfaces** — `GET /monitoring/pack`,
+  `GET /monitoring/runs` (profile / purpose filters),
+  `POST /monitoring/boards`, `GET /monitoring/boards`
+  (+ `/{board_id}`), `GET /monitoring/verify`; the
+  `fmcg-agent-monitoring` CLI; the demo runs its
+  pipeline through the recording port, strikes a board
+  and reads the reconciliation and the named gaps off
+  it.
+
+Honest positions, stated plainly: token figures are
+estimates under the pack's stated rule, and costs are
+estimates at reference rates — a deployment replaces
+the rate card with its contracted rates by striking a
+new pack version, and no figure here is a provider
+bill. Freshness judges receipt time of loaded batches
+against stated windows; it says nothing about whether
+a feed's *contents* were right — that is the data
+plane's quarantine discipline, one layer down.
+Insert-only remains a service discipline, not a
+storage guarantee: records forged around the service
+are detected by the verifier, not prevented.
+
 ## Honest status
 
 - **Built and gated in R1:** the spine, generator + manifest, store port +
@@ -1550,10 +1639,30 @@ control.
   corpus integrity and the stated bounds; the
   truth-isolation scan now covers the screening
   package too.
-- **Not yet built:** R18 onward on the round map (the
-  F20-AM2 cost, usage and service-monitoring pass
-  next). The round map runs to R20 and continues past
-  it until the production bar is met.
+- **Built and gated in R18:** the monitoring layer —
+  the monitoring pack (closed purposes, the stated
+  token estimator, the reference rate card, cadence
+  freshness windows; genesis v2026.10.1, fail-closed
+  loader), the recording model port striking one run
+  record per completed call (hashes and counts, never
+  text; cost None for unrated profiles, never zero),
+  monitoring boards struck as-of a stated instant with
+  cost totals reconciling exactly to the rated records
+  folded and per-source freshness verdicts with
+  breaches and never-loaded sources named, migration
+  0018, the monitoring API surfaces (the app ledgers
+  its own calls) and the `fmcg-agent-monitoring` CLI,
+  and the graded walks: reconciliation, freshness
+  verdicts, as-of discipline, refusal-is-not-freshness,
+  and the verifier's tamper probes. Eval gate v17 adds
+  zero-tolerance counters for run records, cost
+  reconciliation, freshness and boards; the
+  truth-isolation scan now covers the monitoring
+  package too.
+- **Not yet built:** R19 onward on the round map (the
+  F20-IA1 + F20-IA2 + F20-DR2 integration and board-pack
+  export pass next). The round map runs to R20 and
+  continues past it until the production bar is met.
 - **The dataset in this repo is generated in-repo for the blueprint** — gold
   by construction, so the engine can be graded against a known future.
 - **Live models are stub-tested until configured:** hosted profiles fail

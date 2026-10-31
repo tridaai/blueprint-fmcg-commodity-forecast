@@ -449,6 +449,25 @@ LangGraph state machine whose transitions are stored artefacts:
   digest instead of silently joining the record.
   Obfuscation past the stated normalisation is a
   stated limit, not a claim.
+- **cost, usage & freshness monitoring** (R18,
+  landed): the operator's ledger (F20-AM2). A
+  monitoring pack states the closed purpose
+  vocabulary, the token estimator, a reference rate
+  card and the cadence freshness windows; a recording
+  port wraps the deployment's model port and strikes
+  one run record per completed call — hashes and
+  counts, never text — priced in integer nano-USD,
+  with unrated profiles carrying cost None rather
+  than a summable zero. A monitoring board folds the
+  ledger, the source registry and the batch
+  artefacts as-of a stated instant: usage totals
+  that are the exact sum of the records folded, and
+  a freshness row per source whose verdict reads
+  from its last loaded batch (a refusal is job
+  history, not freshness), with breaches and
+  never-loaded sources named on the board's face.
+  The verifier re-performs records and boards field
+  for field; drift is named, never silently passed.
 
 ## Failure posture
 
