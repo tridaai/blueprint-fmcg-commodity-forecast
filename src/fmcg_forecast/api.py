@@ -97,6 +97,8 @@ from fmcg_forecast.masterdata.service import (
     MasterDataValidationError,
 )
 from fmcg_forecast.masterdata.verify import verify_masterdata
+from fmcg_forecast.screening.service import ScreeningService
+from fmcg_forecast.screening.verify import verify_screening
 from fmcg_forecast.dashboards.pack import load_dashboard_pack
 from fmcg_forecast.dashboards.service import (
     DashboardNotFoundError,
@@ -529,6 +531,7 @@ class ConsoleActionRequest(BaseModel):
 def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     model_port = model or OfflineModel()
     sentiment = SentimentService(store, model_port)
+    screening_service = ScreeningService(store)
     event_service = EventService(store)
     console_service = ConsoleService(store, event_service)
     service = ForecastService(
@@ -563,7 +566,7 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     masterdata_service = MasterDataService(store)
     app = FastAPI(
         title="FMCG Commodity Forecast — Operations API",
-        version="0.16.0",
+        version="0.17.0",
         description="Read surfaces for the commodity price & driver store, "
         "the governed forecast surface, the backtest/accuracy surface, "
         "the sentiment surface, the event registry, the scenario "
@@ -602,7 +605,11 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
         "scopes, governed reads judged existence-hiding "
         "and recorded in a gapless audit log, and the "
         "versioned market calendars under which coverage "
-        "verdicts re-derive.",
+        "verdicts re-derive, and the screening surface: "
+        "the injection quarantine between the news/policy "
+        "corpus and the model port — instruction-shaped "
+        "items recorded verbatim and never extracted, "
+        "never indexed, never cited.",
     )
 
     @app.middleware("http")
@@ -1184,10 +1191,14 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
         if found is None:
             raise HTTPException(status_code=404, detail=f"unknown item {item_id}")
         extraction = sentiment.get_extraction(item_id)
+        record = screening_service.get_record(item_id)
         return {
             "item": found.model_dump(mode="json"),
             "extraction": (
                 extraction.model_dump(mode="json") if extraction is not None else None
+            ),
+            "screening": (
+                record.model_dump(mode="json") if record is not None else None
             ),
         }
 
@@ -1216,6 +1227,32 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     @app.get("/sentiment/verify")
     def sentiment_verify() -> dict:
         return sentiment.verify_stored()
+
+    # -- screening: the injection quarantine (R17, F20-AS2) -------------
+
+    @app.get("/screening/pack")
+    def screening_pack() -> dict:
+        return screening_service.pack.model_dump(mode="json")
+
+    @app.get("/screening/records")
+    def screening_records(commodity: str | None = Query(None)) -> dict:
+        found = screening_service.list_records(commodity)
+        return {"records": [r.model_dump(mode="json") for r in found]}
+
+    @app.get("/screening/records/{item_id}")
+    def screening_record(item_id: str) -> dict:
+        found = screening_service.get_record(item_id)
+        if found is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"no quarantine record for item {item_id} — "
+                "the item passed the screen (or is not on record)",
+            )
+        return found.model_dump(mode="json")
+
+    @app.get("/screening/verify")
+    def screening_verify() -> dict:
+        return {"problems": verify_screening(store)}
 
     # -- backtests + the accuracy ledger (R3) ---------------------------
 
