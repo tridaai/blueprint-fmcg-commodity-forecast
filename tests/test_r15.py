@@ -816,6 +816,7 @@ def test_api_desk_surface(graded):
     )
     assert r.status_code == 201
     assert r.json()["body"] == "check the arrivals figure"
+    comment_id = r.json()["comment_id"]
     r = client.get(
         "/desk/comments",
         params={
@@ -824,7 +825,9 @@ def test_api_desk_surface(graded):
         },
     )
     assert r.status_code == 200
-    assert len(r.json()["comments"]) == 1
+    assert comment_id in [
+        c["comment_id"] for c in r.json()["comments"]
+    ]
     r = client.post(
         "/desk/comments",
         json={
