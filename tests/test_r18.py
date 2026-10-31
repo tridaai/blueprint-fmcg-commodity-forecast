@@ -216,6 +216,24 @@ def test_a_refused_call_strikes_no_record(tmp_path):
     assert store.list_model_runs() == []
 
 
+def test_a_repeated_identical_call_is_one_record(tmp_path):
+    """The pipeline re-drafts commentary for standing indices on
+    every run, so identical calls are the common case: a repeat
+    under the same content address holds ONE record and the
+    second strike does not raise."""
+    store = build_store(str(tmp_path / "t.db"))
+    port = RecordingModelPort(
+        OfflineModel(), store, load_monitoring_pack(),
+        clock=_clock([AS_OF, AS_OF]),
+    )
+    port.draft_commentary(subject="Wheat", figures={"p50": "2450"})
+    port.draft_commentary(subject="Wheat", figures={"p50": "2450"})
+    records = store.list_model_runs()
+    assert len(records) == 1
+    assert records[0].purpose == "commentary_drafting"
+    assert verify_monitoring(store) == []
+
+
 def test_pipeline_calls_are_ledgered_exactly_once(tmp_path):
     store = build_store(str(tmp_path / "t.db"))
     store.insert_sentiment_items(

@@ -3091,29 +3091,66 @@ class SqlStore:
         return records
 
     # -- monitoring run ledger and boards (R18) ------------------------
+    # Run records are the store's one high-frequency write — a single
+    # pipeline run makes hundreds of model calls — so they flush in
+    # batches: at 64 pending, before any monitoring read, and on
+    # close, always as insert-or-ignore (a repeated identical call is
+    # already on record under its content address). A hard process
+    # kill can lose the unflushed tail (fewer than 64 records);
+    # every read path flushes first, so anything a caller can
+    # observe is complete.
 
-    def insert_model_run(self, record: RunRecord) -> None:
+    _RUN_FLUSH_AT = 64
+
+    def _flush_model_runs(self) -> None:
+        pending = getattr(self, "_pending_runs", None)
+        if not pending:
+            return
+        self._pending_runs = []
+        verb = (
+            "INSERT OR IGNORE INTO model_runs"
+            if self.dialect == "sqlite"
+            else "INSERT INTO model_runs"
+        )
         sql = self._q(
-            "INSERT INTO model_runs (run_id, profile, purpose, payload) "
+            f"{verb} (run_id, profile, purpose, payload) "
             "VALUES (?, ?, ?, ?)"
         )
-        self._conn.execute(
-            sql,
+        if self.dialect == "postgres":
+            sql += " ON CONFLICT (run_id) DO NOTHING"
+        rows = [
             (
                 record.run_id,
                 record.profile,
                 record.purpose,
                 record.model_dump_json(),
-            ),
-        )
-        if self.dialect == "sqlite":
+            )
+            for record in pending
+        ]
+        if self.dialect == "postgres":
+            with self._conn.transaction():
+                with self._conn.cursor() as cur:
+                    cur.executemany(sql, rows)
+        else:
+            self._conn.executemany(sql, rows)
             self._conn.commit()
+
+    def insert_model_run(self, record: RunRecord) -> None:
+        pending = getattr(self, "_pending_runs", None)
+        if pending is None:
+            pending = self._pending_runs = []
+        if any(held.run_id == record.run_id for held in pending):
+            return
+        pending.append(record)
+        if len(pending) >= self._RUN_FLUSH_AT:
+            self._flush_model_runs()
 
     def list_model_runs(
         self,
         profile: str | None = None,
         purpose: str | None = None,
     ) -> list[RunRecord]:
+        self._flush_model_runs()
         sql = "SELECT payload FROM model_runs"
         clauses: list[str] = []
         params: list = []
@@ -3130,6 +3167,7 @@ class SqlStore:
         return [RunRecord.model_validate(json.loads(r[0])) for r in cur.fetchall()]
 
     def insert_monitoring_board(self, board: MonitoringBoard) -> None:
+        self._flush_model_runs()
         sql = self._q(
             "INSERT INTO monitoring_boards (board_id, payload) "
             "VALUES (?, ?)"
@@ -3158,7 +3196,10 @@ class SqlStore:
         ]
 
     def close(self) -> None:
-        self._conn.close()
+        try:
+            self._flush_model_runs()
+        finally:
+            self._conn.close()
 
 
 def build_store(sqlite_path: str | None = None, database_url: str | None = None) -> SqlStore:
