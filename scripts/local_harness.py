@@ -959,6 +959,70 @@ def main() -> int:
         checks.append(
             ("screening layer re-performs clean", r.status_code == 200 and r.json()["problems"] == [])
         )
+        # --- Round 18: cost, usage and freshness monitoring ---
+        r = client.get(f"{BASE}/monitoring/pack")
+        checks.append(
+            ("the monitoring pack reads",
+             r.status_code == 200 and r.json()["version"] == "2026.10.1")
+        )
+        # the R17 pipeline run above was served by this app, whose
+        # port is ledgered: its completed calls are on record
+        r = client.get(f"{BASE}/monitoring/runs")
+        all_runs = r.json()["runs"] if r.status_code == 200 else []
+        checks.append(
+            ("the app's own model calls are ledgered",
+             len(all_runs) >= 1
+             and any(
+                 run["purpose"] == "sentiment_extraction"
+                 for run in all_runs
+             )
+             and all(run["cost_nano_usd"] is None for run in all_runs))
+        )
+        r = client.get(
+            f"{BASE}/monitoring/runs",
+            params={"purpose": "sentiment_extraction"},
+        )
+        slice_runs = r.json()["runs"] if r.status_code == 200 else []
+        checks.append(
+            ("a purpose filter reads exactly its slice",
+             len(slice_runs) >= 1
+             and all(
+                 run["purpose"] == "sentiment_extraction"
+                 for run in slice_runs
+             )
+             and len(slice_runs) == sum(
+                 1 for run in all_runs
+                 if run["purpose"] == "sentiment_extraction"))
+        )
+        r = client.post(f"{BASE}/monitoring/boards")
+        checks.append(
+            ("a monitoring board strikes",
+             r.status_code == 200
+             and r.json()["total_calls"] >= 1
+             and r.json()["unrated_calls"] == r.json()["total_calls"]
+             and r.json()["total_cost_nano_usd"] == 0)
+        )
+        _board = r.json()
+        checks.append(
+            ("never-loaded feeds are named on the board",
+             "agmarknet_file_drop" in _board["never_loaded"]
+             and _board["breaches"] == []
+             and len(_board["freshness"]) == 6)
+        )
+        r = client.get(f"{BASE}/monitoring/boards/{_board['board_id']}")
+        checks.append(
+            ("the board reads back by its address",
+             r.status_code == 200 and r.json()["board_id"] == _board["board_id"])
+        )
+        r = client.get(f"{BASE}/monitoring/boards/MON-nope")
+        checks.append(
+            ("an unknown board reads as missing",
+             r.status_code == 404)
+        )
+        r = client.get(f"{BASE}/monitoring/verify")
+        checks.append(
+            ("monitoring layer re-performs clean", r.status_code == 200 and r.json()["problems"] == [])
+        )
         for name, ok in checks:
             print(f"  {'PASS' if ok else 'FAIL'}  {name}")
         return 0 if all(ok for _, ok in checks) else 1

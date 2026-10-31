@@ -447,6 +447,30 @@ F20-AS2; corpus poisoning suite), also zero-tolerance:
   leetspeak item (the pack's stated limit) read as
   anything but its one lexicon phrase.
 
+Round 18 counters (cost, usage and service monitoring —
+F20-AM2), also zero-tolerance:
+
+- monitoring_record_errors: a completed model-port call
+  that struck no run record (or struck two), a record
+  whose hashes do not re-derive from the payloads sent,
+  a record whose stored payload carries the prompt's
+  text anywhere, a refused call that struck a record
+  anyway, or the layer failing to re-perform clean.
+- monitoring_cost_errors: a rated call priced at
+  anything but the pack's exact arithmetic, an unrated
+  call carrying a cost (or a zero), or a board whose
+  cost total differs from the sum of the rated records
+  it folds by so much as a nano.
+- monitoring_freshness_errors: a source past its
+  cadence window not named late and in the board's
+  breaches, a never-loaded source absent from the
+  board or its never-loaded list, a one-off source
+  breaching, or a refusal read as refreshing freshness.
+- monitoring_board_errors: a board that does not fold
+  only what had landed by its as-of, a tampered record
+  (rewritten cost, honestly addressed) or a board with
+  a quietly dropped breach that the verifier passes.
+
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
 
@@ -494,6 +518,7 @@ def truth_isolation_violations() -> int:
         + list((base / "access").rglob("*.py"))
         + list((base / "masterdata").rglob("*.py"))
         + list((base / "screening").rglob("*.py"))
+        + list((base / "monitoring").rglob("*.py"))
     )
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -621,6 +646,10 @@ def main() -> int:
         "screening_record_errors": 0,
         "screening_corpus_errors": 0,
         "screening_bound_errors": 0,
+        "monitoring_record_errors": 0,
+        "monitoring_cost_errors": 0,
+        "monitoring_freshness_errors": 0,
+        "monitoring_board_errors": 0,
     }
 
     # --- planted events, measured seasonally-matched ---------------
@@ -4430,7 +4459,242 @@ def main() -> int:
     ):
         counters["screening_record_errors"] += 1
 
-    print("Round 17 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio + R7 prompt-to-dashboard + R8 buy signals & coverage planning + R9 alerting, subscriptions & escalation + R10 thin-data depth & assisted intake + R11 production data plane + R12 forecast-ops analytics & shock grading + R13 operator console: review queue & rejection, event triage gate, coverage pre-flight, phone action parity + R14 geospatial basis & netting: basis bands, desk cost lines, landed comparisons, market map and weather/event overlay + R15 desk policy, approvals, config: pack versions with diffs, approval chains, the gapless decision log, comments and follow-up tasks + R16 identity, scopes, access audit & master data: role-scoped governed reads, existence hiding, the gapless audit fold, versioned market calendars and re-derived coverage + R17 red team: the injection quarantine between corpus and model port, the context audit over a recording port, corpus integrity re-performance, and the stated bounds — stuffing capped at the ladder, leetspeak inert)")
+    # --- Round 18: cost, usage and service monitoring (F20-AM2) -----
+    # The recording port ledgers every completed call; the board's
+    # cost total must reconcile to the record exactly; freshness
+    # breaches must be named by source; and a tampered record or a
+    # doctored board must be named by the verifier.
+    import tempfile as _tempfile18
+    from datetime import datetime as _datetime18
+    from datetime import timedelta as _timedelta18
+    from datetime import timezone as _timezone18
+    from pathlib import Path as _Path18
+
+    from fmcg_forecast.ingest.models import IngestBatch as _Batch18
+    from fmcg_forecast.ingest.models import batch_content_id as _batch_id18
+    from fmcg_forecast.modelport import (
+        ModelNotConfiguredError as _Refusal18,
+    )
+    from fmcg_forecast.modelport import OfflineModel as _Offline18
+    from fmcg_forecast.monitoring.models import (
+        board_content_id as _board_id18,
+    )
+    from fmcg_forecast.monitoring.models import (
+        payload_hash as _hash18,
+    )
+    from fmcg_forecast.monitoring.models import run_content_id as _run_id18
+    from fmcg_forecast.monitoring.pack import (
+        load_monitoring_pack as _load_mon18,
+    )
+    from fmcg_forecast.monitoring.port import (
+        RecordingModelPort as _Recording18,
+    )
+    from fmcg_forecast.monitoring.service import (
+        MonitoringService as _MonService18,
+    )
+    from fmcg_forecast.monitoring.verify import (
+        verify_monitoring as _verify_mon18,
+    )
+    from fmcg_forecast.store import build_store as _build_store18
+
+    _pack18 = _load_mon18()
+    _asof18 = _datetime18(2026, 1, 10, 12, 0, tzinfo=_timezone18.utc)
+    _mon18 = _build_store18(
+        str(_Path18(_tempfile18.mkdtemp(dir=None)) / "monitoring.db")
+    )
+
+    def _clock18(times):
+        _it = iter(times)
+        return lambda: next(_it)
+
+    # (a) the ledger: one record per completed call, hashes not text
+    _port18 = _Recording18(
+        _Offline18(), _mon18, _pack18,
+        clock=_clock18(
+            [_asof18 - _timedelta18(hours=3) + _timedelta18(minutes=11 * i)
+             for i in range(4)]
+        ),
+    )
+    _port18.extract_sentiment(headline="Arrivals surge at mandis.")
+    _port18.draft_commentary(subject="Wheat", figures={"p50": "2450"})
+    _port18.parse_scenario(text="what if the tariff holds", events=[])
+    _port18.parse_dashboard(text="show wheat", context={})
+    _records18 = _mon18.list_model_runs()
+    if len(_records18) != 4:
+        counters["monitoring_record_errors"] += 1
+    if {r.purpose for r in _records18} != set(_pack18.purposes):
+        counters["monitoring_record_errors"] += 1
+    for _r18 in _records18:
+        if _run_id18(_r18) != _r18.run_id:
+            counters["monitoring_record_errors"] += 1
+        if "Arrivals surge" in _r18.model_dump_json():
+            counters["monitoring_record_errors"] += 1
+    _headline18 = [r for r in _records18
+                   if r.purpose == "sentiment_extraction"]
+    if not _headline18 or _headline18[0].request_hash != _hash18(
+        {"headline": "Arrivals surge at mandis."}
+    ):
+        counters["monitoring_record_errors"] += 1
+
+    class _Refusing18(_Offline18):
+        profile_name = "anthropic"
+
+        def extract_sentiment(self, *, headline: str) -> dict:
+            raise _Refusal18("refusing, as a hosted port does")
+
+    _refusing18 = _Recording18(
+        _Refusing18(), _mon18, _pack18, clock=_clock18([_asof18])
+    )
+    try:
+        _refusing18.extract_sentiment(headline="anything")
+        counters["monitoring_record_errors"] += 1
+    except _Refusal18:
+        pass
+    if len(_mon18.list_model_runs()) != 4:
+        counters["monitoring_record_errors"] += 1
+    if _verify_mon18(_mon18):
+        counters["monitoring_record_errors"] += 1
+
+    # (b) cost: rated arithmetic exact, unrated counted never priced
+    class _Rated18(_Offline18):
+        profile_name = "anthropic"
+
+    _rated18 = _Recording18(
+        _Rated18(), _mon18, _pack18,
+        clock=_clock18([_asof18 - _timedelta18(hours=1)]),
+    )
+    _rated18.extract_sentiment(headline="Export demand strong.")
+    _rated_records18 = [
+        r for r in _mon18.list_model_runs()
+        if r.cost_basis == "reference_rate"
+    ]
+    if len(_rated_records18) != 1:
+        counters["monitoring_cost_errors"] += 1
+    else:
+        _rr18 = _rated_records18[0]
+        _expected18 = int(round(
+            (_rr18.request_tokens * 3_000_000_000
+             + _rr18.response_tokens * 15_000_000_000) / 1_000_000
+        ))
+        if _rr18.cost_nano_usd != _expected18 or not _rr18.cost_nano_usd:
+            counters["monitoring_cost_errors"] += 1
+    for _r18 in _mon18.list_model_runs():
+        if _r18.profile == "offline" and _r18.cost_nano_usd is not None:
+            counters["monitoring_cost_errors"] += 1
+
+    # (c) freshness: breaches and gaps named by source
+    def _mkbatch18(source_id, received_at, status="loaded"):
+        digest = _hash18(
+            {"source": source_id, "at": received_at.isoformat()}
+        )
+        return _Batch18(
+            batch_id=_batch_id18(
+                source_id, "file_drop", _date17(2026, 1, 9), digest,
+                "2026.10.1",
+            ),
+            source_id=source_id,
+            connector_kind="file_drop",
+            received_by="a.sharma",
+            received_at=received_at,
+            as_of=_date17(2026, 1, 9) if status == "loaded" else None,
+            pack_version="2026.10.1",
+            status=status,
+            refusal_reason="" if status == "loaded" else "unit_mismatch",
+            rows_received=10 if status == "loaded" else 0,
+            rows_loaded=9 if status == "loaded" else 0,
+            rows_quarantined=1 if status == "loaded" else 0,
+            rows_duplicate=0,
+            content_digest=digest,
+        )
+
+    _mon18.insert_ingest_batch(
+        _mkbatch18("agmarknet_file_drop", _asof18 - _timedelta18(hours=48))
+    )
+    _mon18.insert_ingest_batch(
+        _mkbatch18("mandi_api_push", _asof18 - _timedelta18(hours=1))
+    )
+    _mon18.insert_ingest_batch(
+        _mkbatch18("trade_flow_file_drop", _asof18 - _timedelta18(hours=2),
+                   status="refused")
+    )
+    _mon18.insert_ingest_batch(
+        _mkbatch18("weather_service_pull", _asof18 - _timedelta18(hours=72))
+    )
+    _mon18.insert_ingest_batch(
+        _mkbatch18("weather_service_pull", _asof18 - _timedelta18(hours=1),
+                   status="refused")
+    )
+    _board18 = _MonService18(_mon18, _pack18).strike_board(as_of=_asof18)
+    _rows18 = {r.source_id: r for r in _board18.freshness}
+    if _rows18["agmarknet_file_drop"].state != "late":
+        counters["monitoring_freshness_errors"] += 1
+    if _rows18["weather_service_pull"].state != "late":
+        counters["monitoring_freshness_errors"] += 1
+    if _rows18["mandi_api_push"].state != "fresh":
+        counters["monitoring_freshness_errors"] += 1
+    if sorted(_board18.breaches) != [
+        "agmarknet_file_drop", "weather_service_pull"
+    ]:
+        counters["monitoring_freshness_errors"] += 1
+    if _rows18["trade_flow_file_drop"].state != "never_loaded":
+        counters["monitoring_freshness_errors"] += 1
+    if sorted(_board18.never_loaded) != [
+        "exchange_bhavcopy_drop", "trade_flow_file_drop"
+    ]:
+        counters["monitoring_freshness_errors"] += 1
+    if _rows18["verdanta_generated_history"].state != "one_off":
+        counters["monitoring_freshness_errors"] += 1
+    if len(_board18.freshness) != 6:
+        counters["monitoring_freshness_errors"] += 1
+    # the cost total on the same board reconciles to the record
+    if _board18.total_cost_nano_usd != sum(
+        r.cost_nano_usd for r in _rated_records18
+    ):
+        counters["monitoring_cost_errors"] += 1
+    if _board18.unrated_calls != 4 or _board18.rated_calls != 1:
+        counters["monitoring_cost_errors"] += 1
+    if _verify_mon18(_mon18):
+        counters["monitoring_record_errors"] += 1
+
+    # (d) as-of discipline and tamper: named, never passed
+    _late18 = _Recording18(
+        _Offline18(), _mon18, _pack18,
+        clock=_clock18([_asof18 + _timedelta18(hours=5)]),
+    )
+    _late18.extract_sentiment(headline="Late monsoon revival likely.")
+    _board18b = _MonService18(_mon18, _pack18).strike_board(as_of=_asof18)
+    if _board18b.board_id != _board18.board_id:
+        counters["monitoring_board_errors"] += 1
+    if _board18b.total_calls != 5:
+        counters["monitoring_board_errors"] += 1
+    _scratch18 = _build_store18(
+        str(_Path18(_tempfile18.mkdtemp(dir=None)) / "tamper.db")
+    )
+    _forged18 = _rated_records18[0].model_copy(
+        update={"cost_nano_usd": _rated_records18[0].cost_nano_usd + 1}
+    )
+    _forged18 = _forged18.model_copy(update={"run_id": _run_id18(_forged18)})
+    _scratch18.insert_model_run(_forged18)
+    if not any("states cost" in p for p in _verify_mon18(_scratch18)):
+        counters["monitoring_board_errors"] += 1
+    _scratch18b = _build_store18(
+        str(_Path18(_tempfile18.mkdtemp(dir=None)) / "tamper-board.db")
+    )
+    for _r18 in _mon18.list_model_runs():
+        _scratch18b.insert_model_run(_r18)
+    for _b18 in _mon18.list_ingest_batches():
+        _scratch18b.insert_ingest_batch(_b18)
+    _doctored18 = _board18.model_copy(update={"breaches": []})
+    _doctored18 = _doctored18.model_copy(
+        update={"board_id": _board_id18(_doctored18)}
+    )
+    _scratch18b.insert_monitoring_board(_doctored18)
+    if not any(
+        "does not re-perform" in p for p in _verify_mon18(_scratch18b)
+    ):
+        counters["monitoring_board_errors"] += 1
+
+    print("Round 18 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio + R7 prompt-to-dashboard + R8 buy signals & coverage planning + R9 alerting, subscriptions & escalation + R10 thin-data depth & assisted intake + R11 production data plane + R12 forecast-ops analytics & shock grading + R13 operator console: review queue & rejection, event triage gate, coverage pre-flight, phone action parity + R14 geospatial basis & netting: basis bands, desk cost lines, landed comparisons, market map and weather/event overlay + R15 desk policy, approvals, config: pack versions with diffs, approval chains, the gapless decision log, comments and follow-up tasks + R16 identity, scopes, access audit & master data: role-scoped governed reads, existence hiding, the gapless audit fold, versioned market calendars and re-derived coverage + R17 red team: the injection quarantine between corpus and model port, the context audit over a recording port, corpus integrity re-performance, and the stated bounds — stuffing capped at the ladder, leetspeak inert + R18 cost, usage and service monitoring: the run ledger over the recording port, exact cost reconciliation, freshness breaches named by source, as-of discipline and tamper named by the verifier)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]

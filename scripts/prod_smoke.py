@@ -594,6 +594,114 @@ def main() -> int:
                 )
             print("screening parity: quarantine records and "
                   "extractions identical across profiles (gap 0)")
+
+            # --- R18: monitoring on this profile ------------------
+            from datetime import datetime, timedelta, timezone
+
+            from fmcg_forecast.ingest.models import (
+                IngestBatch,
+                batch_content_id,
+            )
+            from fmcg_forecast.monitoring.models import payload_hash
+            from fmcg_forecast.monitoring.pack import load_monitoring_pack
+            from fmcg_forecast.monitoring.port import RecordingModelPort
+            from fmcg_forecast.monitoring.service import MonitoringService
+            from fmcg_forecast.monitoring.verify import verify_monitoring
+
+            _asof_smoke = datetime(2026, 1, 10, 12, 0, tzinfo=timezone.utc)
+
+            def _monitoring_walk(walk_store):
+                pack = load_monitoring_pack()
+                times = iter(
+                    _asof_smoke - timedelta(hours=3)
+                    + timedelta(minutes=13 * i)
+                    for i in range(3)
+                )
+                port = RecordingModelPort(
+                    OfflineModel(), walk_store, pack,
+                    clock=lambda: next(times),
+                )
+                port.extract_sentiment(headline="Arrivals surge at mandis.")
+                port.draft_commentary(
+                    subject="Wheat", figures={"p50": "2450"}
+                )
+                port.parse_dashboard(text="show wheat", context={})
+                digest = payload_hash({"smoke": "r18"})
+                walk_store.insert_ingest_batch(
+                    IngestBatch(
+                        batch_id=batch_content_id(
+                            "agmarknet_file_drop", "file_drop",
+                            date(2026, 1, 9), digest, "2026.10.1",
+                        ),
+                        source_id="agmarknet_file_drop",
+                        connector_kind="file_drop",
+                        received_by="a.sharma",
+                        received_at=_asof_smoke - timedelta(hours=48),
+                        as_of=date(2026, 1, 9),
+                        pack_version="2026.10.1",
+                        status="loaded",
+                        refusal_reason="",
+                        rows_received=10,
+                        rows_loaded=9,
+                        rows_quarantined=1,
+                        rows_duplicate=0,
+                        content_digest=digest,
+                    )
+                )
+                board = MonitoringService(walk_store, pack).strike_board(
+                    as_of=_asof_smoke
+                )
+                return {
+                    "runs": [
+                        r.model_dump(mode="json")
+                        for r in walk_store.list_model_runs()
+                    ],
+                    "board": board.model_dump(mode="json"),
+                    "problems": verify_monitoring(walk_store, pack),
+                }
+
+            # A board folds its store's WHOLE batch history, so
+            # the parity walk needs a clean room on each profile:
+            # a fresh schema here, a fresh file there — the same
+            # isolation the desk and geo sections use, one level
+            # stricter because the fold is store-wide.
+            _mon_schema = f"smoke_mon_{uuid.uuid4().hex[:12]}"
+            admin.execute(f'CREATE SCHEMA "{_mon_schema}"')
+            _mon_pg = build_store(
+                database_url=(
+                    f"{base_url}{sep}options=-c%20search_path%3D"
+                    f"{_mon_schema}"
+                )
+            )
+            _mon_lite = build_store(str(Path(tmp) / "monitoring.db"))
+            pg_mon_walk = _monitoring_walk(_mon_pg)
+            lite_mon_walk = _monitoring_walk(_mon_lite)
+            _mon_pg.close()
+            _mon_lite.close()
+            admin.execute(f'DROP SCHEMA "{_mon_schema}" CASCADE')
+            if pg_mon_walk["problems"]:
+                problems.append(
+                    "monitoring layer does not verify on Postgres: "
+                    f"{pg_mon_walk['problems']}"
+                )
+            if lite_mon_walk["problems"]:
+                problems.append(
+                    "monitoring layer does not verify on SQLite: "
+                    f"{lite_mon_walk['problems']}"
+                )
+            if pg_mon_walk != lite_mon_walk:
+                problems.append(
+                    "monitoring parity: run records or board "
+                    "differ across profiles"
+                )
+            if pg_mon_walk["board"]["breaches"] != ["agmarknet_file_drop"]:
+                problems.append(
+                    "monitoring walk breaches "
+                    f"{pg_mon_walk['board']['breaches']}, expected "
+                    "the planted late daily feed named"
+                )
+            print("monitoring parity: run records, cost totals and "
+                  "freshness board identical across profiles (gap 0)")
         print("desk parity: version, decision, log, comment and "
               "task artefacts identical across profiles (gap 0)")
     finally:
