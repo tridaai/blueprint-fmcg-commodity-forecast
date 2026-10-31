@@ -106,12 +106,23 @@ def build_usage(records: list[RunRecord], pack: MonitoringPack) -> list[UsageRow
     return rows
 
 
+def _aware(moment: datetime) -> datetime:
+    """Read a stored instant as UTC when it carries no zone.
+
+    Artefacts struck by earlier rounds may carry naive
+    datetimes (the demo's ingest beats among them); the
+    fold reads them as UTC rather than refusing to
+    compare them against a stated as-of.
+    """
+    if moment.tzinfo is None:
+        return moment.replace(tzinfo=timezone.utc)
+    return moment
+
+
 def _age_hours(last: datetime, as_of: datetime) -> float:
-    if last.tzinfo is None:
-        last = last.replace(tzinfo=timezone.utc)
-    if as_of.tzinfo is None:
-        as_of = as_of.replace(tzinfo=timezone.utc)
-    return round((as_of - last).total_seconds() / 3600.0, 1)
+    return round(
+        (_aware(as_of) - _aware(last)).total_seconds() / 3600.0, 1
+    )
 
 
 def build_freshness_row(
@@ -132,9 +143,10 @@ def build_freshness_row(
         (
             b
             for b in batches
-            if b.source_id == source.source_id and b.received_at <= as_of
+            if b.source_id == source.source_id
+            and _aware(b.received_at) <= _aware(as_of)
         ),
-        key=lambda b: (b.received_at, b.batch_id),
+        key=lambda b: (_aware(b.received_at), b.batch_id),
     )
     loaded = [b for b in mine if b.status == "loaded"]
     totals = dict(
@@ -229,8 +241,8 @@ def build_board(
 ) -> MonitoringBoard:
     """Strike a board: the folds, and nothing authored."""
     folded_records = sorted(
-        (r for r in records if r.called_at <= struck_at),
-        key=lambda r: (r.called_at, r.run_id),
+        (r for r in records if _aware(r.called_at) <= _aware(struck_at)),
+        key=lambda r: (_aware(r.called_at), r.run_id),
     )
     usage = build_usage(folded_records, pack)
     rated_calls = sum(

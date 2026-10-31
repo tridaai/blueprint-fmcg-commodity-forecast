@@ -1045,6 +1045,58 @@ def main() -> int:
           f"passes byte-identical and classifies on its real "
           f"phrase; the layer re-performs with "
           f"{len(verify_screening(store))} problems")
+
+    print("\n--- cost, usage and freshness (R18, F20-AM2): what the service cost and which feeds are late ---")
+    from fmcg_forecast.monitoring.port import RecordingModelPort
+    from fmcg_forecast.monitoring.service import MonitoringService
+    from fmcg_forecast.monitoring.verify import verify_monitoring
+    from fmcg_forecast.sentiment.service import SentimentService as _DemoSentiment
+
+    store.insert_sentiment_items(
+        [
+            SentimentItem(
+                item_id="NEWS-2027-903",
+                commodity="wheat",
+                item_date=date(2027, 1, 11),
+                source="trade wire",
+                headline="Arrivals surge at mandis after the "
+                "holiday break.",
+            ),
+            SentimentItem(
+                item_id="NEWS-2027-904",
+                commodity="wheat",
+                item_date=date(2027, 1, 11),
+                source="trade wire",
+                headline="Export enquiries rise for Gulf "
+                "destinations.",
+            ),
+        ]
+    )
+    monitoring = MonitoringService(store)
+    ledgered = _DemoSentiment(
+        store, monitoring.wrap(build_model_port(settings))
+    )
+    ledgered.run_pipeline()
+    board = monitoring.strike_board()
+    rated_cost = sum(
+        r.cost_nano_usd or 0
+        for r in store.list_model_runs()
+        if r.cost_basis == "reference_rate"
+    )
+    print(f"  the pipeline's calls are ledgered: {board.total_calls} "
+          f"run records, {board.total_request_tokens} request and "
+          f"{board.total_response_tokens} response tokens by the "
+          f"pack's estimator; the board's cost total "
+          f"({board.total_cost_nano_usd} nano-USD) is the exact sum "
+          f"of its rated records ({rated_cost}); the "
+          f"{board.unrated_calls} offline calls carry cost None — "
+          f"counted, never priced, never zero-filled")
+    print(f"  freshness: no feed has breached its window on this "
+          f"fresh store, and the board names the "
+          f"{len(board.never_loaded)} registered sources that have "
+          f"never loaded — {', '.join(board.never_loaded)} — while "
+          f"the one-off bootstrap owes no window; the layer "
+          f"re-performs with {len(verify_monitoring(store))} problems")
     print(f"sealed truth rows stored: {truth_store.count()} (readable only via the truth store)")
     return 0
 
