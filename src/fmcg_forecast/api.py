@@ -42,7 +42,7 @@ import logging
 from datetime import date, datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
 
 from fmcg_forecast.analytics.engine import AnalyticsError
@@ -97,6 +97,19 @@ from fmcg_forecast.masterdata.service import (
     MasterDataValidationError,
 )
 from fmcg_forecast.masterdata.verify import verify_masterdata
+from fmcg_forecast.integrations.engine import file_bytes as pack_file_bytes
+from fmcg_forecast.integrations.pack import (
+    load_integrations_pack,
+    surface_for_path,
+)
+from fmcg_forecast.integrations.port import UrllibWebhookPort
+from fmcg_forecast.integrations.service import (
+    IntegrationError,
+    IntegrationsService,
+    public_subscription,
+)
+from fmcg_forecast.integrations.tools import TOOL_CATALOGUE, call_tool
+from fmcg_forecast.integrations.verify import verify_integrations
 from fmcg_forecast.monitoring.service import MonitoringService
 from fmcg_forecast.monitoring.verify import verify_monitoring
 from fmcg_forecast.screening.service import ScreeningService
@@ -194,6 +207,37 @@ class ApproveRequest(BaseModel):
     approver: str
     role: str
     decided_on: date | None = None
+
+
+class IssueTokenRequest(BaseModel):
+    name: str
+    scopes: list[str]
+    issued_by: str
+
+
+class RevokeTokenRequest(BaseModel):
+    actor: str
+    reason: str
+
+
+class CreateSubscriptionRequest(BaseModel):
+    name: str
+    endpoint_url: str
+    event_kinds: list[str]
+    created_by: str
+
+
+class BuildPackRequest(BaseModel):
+    as_of: date
+
+
+class RequestJobRequest(BaseModel):
+    requested_by: str
+    as_of: date
+
+
+class CallToolRequest(BaseModel):
+    args: dict = {}
 
 
 class BacktestRunRequest(BaseModel):
@@ -570,9 +614,11 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     desk_service = DeskService(store)
     access_service = AccessService(store)
     masterdata_service = MasterDataService(store)
+    integrations_service = IntegrationsService(store)
+    integrations_pack = load_integrations_pack()
     app = FastAPI(
         title="FMCG Commodity Forecast — Operations API",
-        version="0.18.0",
+        version="0.19.0",
         description="Read surfaces for the commodity price & driver store, "
         "the governed forecast surface, the backtest/accuracy surface, "
         "the sentiment surface, the event registry, the scenario "
@@ -615,7 +661,16 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
         "the injection quarantine between the news/policy "
         "corpus and the model port — instruction-shaped "
         "items recorded verbatim and never extracted, "
-        "never indexed, never cited.",
+        "never indexed, never cited, and the integration "
+        "surface: scoped bearer tokens judged per surface "
+        "with secrets hashed and shown once, signed "
+        "webhook deliveries of alerts, approvals and "
+        "triage outcomes with every attempt on record, "
+        "board-pack exports struck from artefacts with a "
+        "checksum manifest, export jobs whose completion "
+        "acts name the pack produced, and the read tools "
+        "in MCP shape whose figures always carry their "
+        "artefact id.",
     )
 
     @app.middleware("http")
@@ -625,6 +680,39 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
         response = await call_next(request)
         response.headers["x-request-id"] = rid
         return response
+
+    @app.middleware("http")
+    async def token_scope_middleware(request: Request, call_next):
+        # The integration token discipline (R19, F20-IA1):
+        # a request presenting a bearer secret is bound
+        # by its token's scopes — an unknown or revoked
+        # secret is refused 401, an out-of-scope surface
+        # 403. A request presenting no token keeps the
+        # local posture, as the pack states.
+        authorization = request.headers.get("authorization") or ""
+        if authorization.lower().startswith("bearer "):
+            secret = authorization[7:].strip()
+            token = integrations_service.authenticate(secret)
+            if token is None:
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "detail": "integration token not "
+                        "recognised, or revoked"
+                    },
+                )
+            surface = surface_for_path(
+                integrations_pack, request.url.path
+            )
+            if surface is not None and surface not in token.scopes:
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "detail": f"token {token.token_id} is not "
+                        f"scoped to the {surface} surface"
+                    },
+                )
+        return await call_next(request)
 
     def _principal(request: Request) -> str | None:
         # The governed surfaces (R16, F20-AS1) judge a read
@@ -1295,6 +1383,188 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     @app.get("/monitoring/verify")
     def monitoring_verify() -> dict:
         return {"problems": verify_monitoring(store)}
+
+    # -- the integration surface (R19: F20-IA1 + F20-IA2 + F20-DR2) -----
+
+    @app.get("/integrations/pack")
+    def integrations_pack_route() -> dict:
+        return integrations_pack.model_dump(mode="json")
+
+    @app.post("/integrations/tokens", status_code=201)
+    def integrations_issue_token(body: IssueTokenRequest) -> dict:
+        try:
+            token, secret = integrations_service.issue_token(
+                body.name, body.scopes, body.issued_by
+            )
+        except IntegrationError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+        return {
+            "token": token.model_dump(mode="json"),
+            "secret_shown_once": secret,
+        }
+
+    @app.get("/integrations/tokens")
+    def integrations_tokens() -> dict:
+        return {
+            "tokens": [
+                {
+                    **t.model_dump(mode="json"),
+                    "state": integrations_service.token_state(t),
+                }
+                for t in integrations_service.list_tokens()
+            ]
+        }
+
+    @app.post("/integrations/tokens/{token_id}/revoke")
+    def integrations_revoke_token(
+        token_id: str, body: RevokeTokenRequest
+    ) -> dict:
+        try:
+            act = integrations_service.revoke_token(
+                token_id, body.actor, body.reason
+            )
+        except IntegrationError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+        return act.model_dump(mode="json")
+
+    @app.post("/integrations/subscriptions", status_code=201)
+    def integrations_subscribe(body: CreateSubscriptionRequest) -> dict:
+        try:
+            subscription, secret = integrations_service.create_subscription(
+                body.name, body.endpoint_url, body.event_kinds, body.created_by
+            )
+        except IntegrationError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+        return {
+            "subscription": public_subscription(subscription),
+            "secret_shown_once": secret,
+        }
+
+    @app.get("/integrations/subscriptions")
+    def integrations_subscriptions() -> dict:
+        return {
+            "subscriptions": [
+                public_subscription(s)
+                for s in integrations_service.list_subscriptions()
+            ]
+        }
+
+    @app.post("/integrations/dispatch")
+    def integrations_dispatch() -> dict:
+        struck = integrations_service.dispatch(UrllibWebhookPort())
+        return {
+            "deliveries": [d.model_dump(mode="json") for d in struck]
+        }
+
+    @app.get("/integrations/deliveries")
+    def integrations_deliveries() -> dict:
+        return {
+            "deliveries": [
+                d.model_dump(mode="json")
+                for d in integrations_service.list_deliveries()
+            ]
+        }
+
+    @app.post("/integrations/packs", status_code=201)
+    def integrations_build_pack(body: BuildPackRequest) -> dict:
+        board = integrations_service.build_pack(body.as_of)
+        return board.model_dump(mode="json")
+
+    @app.get("/integrations/packs")
+    def integrations_packs() -> dict:
+        return {
+            "packs": [
+                b.model_dump(mode="json")
+                for b in integrations_service.list_packs()
+            ]
+        }
+
+    @app.get("/integrations/packs/{pack_id}")
+    def integrations_pack_by_id(pack_id: str) -> dict:
+        board = integrations_service.get_pack(pack_id)
+        if board is None:
+            raise HTTPException(
+                status_code=404, detail=f"no board pack {pack_id}"
+            )
+        return board.model_dump(mode="json")
+
+    @app.get("/integrations/packs/{pack_id}/files/{file_name}")
+    def integrations_pack_file(pack_id: str, file_name: str) -> Response:
+        board = integrations_service.get_pack(pack_id)
+        if board is None:
+            raise HTTPException(
+                status_code=404, detail=f"no board pack {pack_id}"
+            )
+        for file in board.files:
+            if file.name == file_name:
+                return Response(
+                    content=pack_file_bytes(file),
+                    media_type=file.media_type,
+                    headers={
+                        "content-disposition": (
+                            f'attachment; filename="{file.name}"'
+                        )
+                    },
+                )
+        raise HTTPException(
+            status_code=404,
+            detail=f"board pack {pack_id} carries no file {file_name}",
+        )
+
+    @app.post("/integrations/jobs", status_code=201)
+    def integrations_request_job(body: RequestJobRequest) -> dict:
+        job = integrations_service.request_job(body.requested_by, body.as_of)
+        return {
+            **job.model_dump(mode="json"),
+            "state": integrations_service.job_state(job),
+        }
+
+    @app.get("/integrations/jobs")
+    def integrations_jobs() -> dict:
+        return {
+            "jobs": [
+                {
+                    **j.model_dump(mode="json"),
+                    "state": integrations_service.job_state(j),
+                }
+                for j in integrations_service.list_jobs()
+            ]
+        }
+
+    @app.get("/integrations/jobs/{job_id}")
+    def integrations_job(job_id: str) -> dict:
+        job = integrations_service.get_job(job_id)
+        if job is None:
+            raise HTTPException(
+                status_code=404, detail=f"no export job {job_id}"
+            )
+        return {
+            **job.model_dump(mode="json"),
+            "state": integrations_service.job_state(job),
+        }
+
+    @app.post("/integrations/jobs/{job_id}/run")
+    def integrations_run_job(job_id: str) -> dict:
+        try:
+            act = integrations_service.run_job(job_id)
+        except IntegrationError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+        return act.model_dump(mode="json")
+
+    @app.get("/integrations/tools")
+    def integrations_tools() -> dict:
+        return {"tools": TOOL_CATALOGUE}
+
+    @app.post("/integrations/tools/{name}/call")
+    def integrations_call_tool(name: str, body: CallToolRequest) -> dict:
+        try:
+            return call_tool(store, name, body.args)
+        except IntegrationError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+
+    @app.get("/integrations/verify")
+    def integrations_verify() -> dict:
+        return {"problems": verify_integrations(store)}
 
     # -- backtests + the accuracy ledger (R3) ---------------------------
 
