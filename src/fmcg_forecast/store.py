@@ -80,6 +80,7 @@ from fmcg_forecast.access.models import (
     PrincipalGrant,
 )
 from fmcg_forecast.masterdata.models import MasterDataVersion
+from fmcg_forecast.monitoring.models import MonitoringBoard, RunRecord
 from fmcg_forecast.screening.models import ScreeningRecord
 from fmcg_forecast.intake.models import IntakeCheckAct, IntakeEntry
 from fmcg_forecast.signals.models import BuySignal
@@ -424,6 +425,18 @@ class Store(Protocol):
     def list_screening_records(
         self, commodity: str | None = None
     ) -> list[ScreeningRecord]: ...
+    # -- monitoring run ledger and boards (R18) --
+    def insert_model_run(self, record: RunRecord) -> None: ...
+    def list_model_runs(
+        self,
+        profile: str | None = None,
+        purpose: str | None = None,
+    ) -> list[RunRecord]: ...
+    def insert_monitoring_board(self, board: MonitoringBoard) -> None: ...
+    def get_monitoring_board(
+        self, board_id: str
+    ) -> MonitoringBoard | None: ...
+    def list_monitoring_boards(self) -> list[MonitoringBoard]: ...
     def close(self) -> None: ...
 
 
@@ -3076,6 +3089,73 @@ class SqlStore:
         if commodity is not None:
             records = [r for r in records if r.commodity == commodity]
         return records
+
+    # -- monitoring run ledger and boards (R18) ------------------------
+
+    def insert_model_run(self, record: RunRecord) -> None:
+        sql = self._q(
+            "INSERT INTO model_runs (run_id, profile, purpose, payload) "
+            "VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                record.run_id,
+                record.profile,
+                record.purpose,
+                record.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def list_model_runs(
+        self,
+        profile: str | None = None,
+        purpose: str | None = None,
+    ) -> list[RunRecord]:
+        sql = "SELECT payload FROM model_runs"
+        clauses: list[str] = []
+        params: list = []
+        if profile is not None:
+            clauses.append("profile = ?")
+            params.append(profile)
+        if purpose is not None:
+            clauses.append("purpose = ?")
+            params.append(purpose)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY run_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [RunRecord.model_validate(json.loads(r[0])) for r in cur.fetchall()]
+
+    def insert_monitoring_board(self, board: MonitoringBoard) -> None:
+        sql = self._q(
+            "INSERT INTO monitoring_boards (board_id, payload) "
+            "VALUES (?, ?)"
+        )
+        self._conn.execute(sql, (board.board_id, board.model_dump_json()))
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_monitoring_board(self, board_id: str) -> MonitoringBoard | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM monitoring_boards WHERE board_id = ?"
+            ),
+            (board_id,),
+        )
+        row = cur.fetchone()
+        return MonitoringBoard.model_validate(json.loads(row[0])) if row else None
+
+    def list_monitoring_boards(self) -> list[MonitoringBoard]:
+        cur = self._conn.execute(
+            self._q("SELECT payload FROM monitoring_boards ORDER BY board_id")
+        )
+        return [
+            MonitoringBoard.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
 
     def close(self) -> None:
         self._conn.close()

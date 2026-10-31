@@ -97,6 +97,8 @@ from fmcg_forecast.masterdata.service import (
     MasterDataValidationError,
 )
 from fmcg_forecast.masterdata.verify import verify_masterdata
+from fmcg_forecast.monitoring.service import MonitoringService
+from fmcg_forecast.monitoring.verify import verify_monitoring
 from fmcg_forecast.screening.service import ScreeningService
 from fmcg_forecast.screening.verify import verify_screening
 from fmcg_forecast.dashboards.pack import load_dashboard_pack
@@ -529,7 +531,11 @@ class ConsoleActionRequest(BaseModel):
 
 
 def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
-    model_port = model or OfflineModel()
+    monitoring_service = MonitoringService(store)
+    # Every model call this app makes is ledgered (R18): the
+    # recording port wraps whatever port the app was handed,
+    # and every service below is built over the wrapped port.
+    model_port = monitoring_service.wrap(model or OfflineModel())
     sentiment = SentimentService(store, model_port)
     screening_service = ScreeningService(store)
     event_service = EventService(store)
@@ -566,7 +572,7 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     masterdata_service = MasterDataService(store)
     app = FastAPI(
         title="FMCG Commodity Forecast — Operations API",
-        version="0.17.0",
+        version="0.18.0",
         description="Read surfaces for the commodity price & driver store, "
         "the governed forecast surface, the backtest/accuracy surface, "
         "the sentiment surface, the event registry, the scenario "
@@ -1253,6 +1259,42 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     @app.get("/screening/verify")
     def screening_verify() -> dict:
         return {"problems": verify_screening(store)}
+
+    # -- monitoring: cost, usage, freshness (R18, F20-AM2) -------------
+
+    @app.get("/monitoring/pack")
+    def monitoring_pack() -> dict:
+        return monitoring_service.pack.model_dump(mode="json")
+
+    @app.get("/monitoring/runs")
+    def monitoring_runs(
+        profile: str | None = Query(None),
+        purpose: str | None = Query(None),
+    ) -> dict:
+        found = monitoring_service.list_runs(profile, purpose)
+        return {"runs": [r.model_dump(mode="json") for r in found]}
+
+    @app.post("/monitoring/boards")
+    def monitoring_strike_board() -> dict:
+        return monitoring_service.strike_board().model_dump(mode="json")
+
+    @app.get("/monitoring/boards")
+    def monitoring_boards() -> dict:
+        found = monitoring_service.list_boards()
+        return {"boards": [b.model_dump(mode="json") for b in found]}
+
+    @app.get("/monitoring/boards/{board_id}")
+    def monitoring_board(board_id: str) -> dict:
+        found = monitoring_service.get_board(board_id)
+        if found is None:
+            raise HTTPException(
+                status_code=404, detail=f"no monitoring board {board_id}"
+            )
+        return found.model_dump(mode="json")
+
+    @app.get("/monitoring/verify")
+    def monitoring_verify() -> dict:
+        return {"problems": verify_monitoring(store)}
 
     # -- backtests + the accuracy ledger (R3) ---------------------------
 
