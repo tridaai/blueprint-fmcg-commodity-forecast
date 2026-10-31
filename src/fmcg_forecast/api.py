@@ -83,6 +83,20 @@ from fmcg_forecast.desk.service import (
     DeskService,
     DeskValidationError,
 )
+from fmcg_forecast.access.pack import load_access_pack
+from fmcg_forecast.access.service import (
+    AccessNotFoundError,
+    AccessService,
+    AccessValidationError,
+)
+from fmcg_forecast.access.verify import verify_access
+from fmcg_forecast.masterdata.pack import load_masterdata_pack
+from fmcg_forecast.masterdata.service import (
+    MasterDataNotFoundError,
+    MasterDataService,
+    MasterDataValidationError,
+)
+from fmcg_forecast.masterdata.verify import verify_masterdata
 from fmcg_forecast.dashboards.pack import load_dashboard_pack
 from fmcg_forecast.dashboards.service import (
     DashboardNotFoundError,
@@ -401,6 +415,25 @@ class ProposePackVersionRequest(BaseModel):
     proposed_on: date
 
 
+class StrikeGrantRequest(BaseModel):
+    subject: str
+    role: str | None = None
+    markets: list[str] | None = None
+    granted_by: str
+    granted_on: date
+
+
+class StrikeAccessLogRequest(BaseModel):
+    struck_on: date
+
+
+class StrikeMasterDataRequest(BaseModel):
+    label: str
+    state: dict
+    edited_by: str
+    edited_on: date
+
+
 class OpenDecisionRequest(BaseModel):
     kind: str
     target_id: str
@@ -526,9 +559,11 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     analytics_service = AnalyticsService(store)
     geo_service = GeoService(store)
     desk_service = DeskService(store)
+    access_service = AccessService(store)
+    masterdata_service = MasterDataService(store)
     app = FastAPI(
         title="FMCG Commodity Forecast — Operations API",
-        version="0.15.0",
+        version="0.16.0",
         description="Read surfaces for the commodity price & driver store, "
         "the governed forecast surface, the backtest/accuracy surface, "
         "the sentiment surface, the event registry, the scenario "
@@ -562,7 +597,12 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
         "standing only through its own chain, the chain "
         "decisions and their acts, the gapless decision "
         "log, and comments and follow-up tasks pinned to "
-        "artefacts of record.",
+        "artefacts of record, and the access & master "
+        "data surface: principal grants with market "
+        "scopes, governed reads judged existence-hiding "
+        "and recorded in a gapless audit log, and the "
+        "versioned market calendars under which coverage "
+        "verdicts re-derive.",
     )
 
     @app.middleware("http")
@@ -572,6 +612,26 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
         response = await call_next(request)
         response.headers["x-request-id"] = rid
         return response
+
+    def _principal(request: Request) -> str | None:
+        # The governed surfaces (R16, F20-AS1) judge a read
+        # when it names its principal in the x-desk-actor
+        # header. No header — or a blank one — is the local
+        # posture: the read proceeds unjudged and
+        # unrecorded, as the desk's reads always have. The
+        # boundary is stated in the access pack.
+        value = (request.headers.get("x-desk-actor") or "").strip()
+        return value or None
+
+    def _assembly_markets(assembly) -> list[str]:
+        spec = dashboard_service.get_spec(assembly.spec_id)
+        return sorted(
+            {
+                panel.scope["market"]
+                for panel in spec.panels
+                if panel.scope.get("market")
+            }
+        )
 
     @app.get("/health")
     def health() -> dict:
@@ -705,11 +765,28 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
         }
 
     @app.get("/forecasts/{forecast_id}")
-    def get_forecast(forecast_id: str) -> dict:
+    def get_forecast(forecast_id: str, request: Request) -> dict:
         try:
-            view = service.get_forecast(forecast_id).model_dump(mode="json")
+            forecast = service.get_forecast(forecast_id)
         except ForecastNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        # A named principal's read of an official forecast
+        # is governed (R16, F20-AS1): judged under their
+        # standing grant and recorded before the answer —
+        # a hidden outcome is answered exactly as if the
+        # forecast did not exist.
+        principal = _principal(request)
+        if principal is not None:
+            entry = access_service.record_read(
+                principal, "forecast", "forecast", forecast_id,
+                [forecast.market], forecast.as_of,
+            )
+            if entry.outcome != "allowed":
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"unknown forecast {forecast_id}",
+                )
+        view = forecast.model_dump(mode="json")
         # The forecast view carries its thin-data assessment
         # (R10): the earned tier per horizon and every named
         # gap ride on the read, never as an optional extra a
@@ -1292,20 +1369,48 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
         return assembly.model_dump(mode="json")
 
     @app.get("/dashboards/assemblies/{assembly_id}")
-    def get_dashboard_assembly(assembly_id: str) -> dict:
-        try:
-            return dashboard_service.get_assembly(assembly_id).model_dump(
-                mode="json"
-            )
-        except DashboardNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-    @app.get("/dashboards/assemblies/{assembly_id}/html")
-    def get_dashboard_html(assembly_id: str) -> HTMLResponse:
+    def get_dashboard_assembly(assembly_id: str, request: Request) -> dict:
         try:
             assembly = dashboard_service.get_assembly(assembly_id)
         except DashboardNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        # Governed like the forecast read (R16, F20-AS1),
+        # judged on every market the assembly's panels
+        # resolved — all in scope, or the assembly hides.
+        principal = _principal(request)
+        if principal is not None:
+            entry = access_service.record_read(
+                principal, "dashboard", "dashboard_assembly",
+                assembly_id, _assembly_markets(assembly),
+                assembly.assembled_on,
+            )
+            if entry.outcome != "allowed":
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"unknown dashboard assembly {assembly_id}",
+                )
+        return assembly.model_dump(mode="json")
+
+    @app.get("/dashboards/assemblies/{assembly_id}/html")
+    def get_dashboard_html(assembly_id: str, request: Request) -> HTMLResponse:
+        try:
+            assembly = dashboard_service.get_assembly(assembly_id)
+        except DashboardNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        # The rendered page is the export surface: a
+        # viewer's grant does not reach it (R16, F20-AS1).
+        principal = _principal(request)
+        if principal is not None:
+            entry = access_service.record_read(
+                principal, "export", "dashboard_assembly",
+                assembly_id, _assembly_markets(assembly),
+                assembly.assembled_on,
+            )
+            if entry.outcome != "allowed":
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"unknown dashboard assembly {assembly_id}",
+                )
         return HTMLResponse(content=assembly.html)
 
     @app.get("/dashboards/assemblies/{assembly_id}/appendix")
@@ -2408,5 +2513,130 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     @app.get("/desk/verify")
     def verify_desk_endpoint() -> dict:
         return {"problems": desk_service.verify_all()}
+
+    # -- access grants, governed reads, audit (R16: F20-AS1) --
+
+    @app.get("/access/pack")
+    def access_pack() -> dict:
+        return load_access_pack().model_dump(mode="json")
+
+    @app.post("/access/grants", status_code=201)
+    def strike_grant(body: StrikeGrantRequest) -> dict:
+        try:
+            grant = access_service.strike_grant(
+                body.subject, body.role, body.markets,
+                body.granted_by, body.granted_on,
+            )
+        except AccessValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return access_service.grant_view(grant)
+
+    @app.get("/access/grants")
+    def list_grants() -> dict:
+        return {
+            "grants": [
+                access_service.grant_view(g)
+                for g in store.list_principal_grants()
+            ]
+        }
+
+    @app.get("/access/standing/{subject}")
+    def standing_grant(subject: str) -> dict:
+        grant = access_service.standing_grant(subject)
+        if grant is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"no standing grant over {subject!r}",
+            )
+        return access_service.grant_view(grant)
+
+    @app.get("/access/entries")
+    def list_access_entries() -> dict:
+        return {
+            "entries": [
+                e.model_dump(mode="json")
+                for e in store.list_access_entries()
+            ]
+        }
+
+    @app.post("/access/logs", status_code=201)
+    def strike_access_log(body: StrikeAccessLogRequest) -> dict:
+        log = access_service.strike_access_log(body.struck_on)
+        return log.model_dump(mode="json")
+
+    @app.get("/access/logs/{log_id}")
+    def get_access_log(log_id: str) -> dict:
+        try:
+            return access_service.get_access_log(log_id).model_dump(
+                mode="json"
+            )
+        except AccessNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/access/verify")
+    def verify_access_endpoint() -> dict:
+        return {"problems": verify_access(store)}
+
+    # -- master data & calendars (R16: F20-AD1) --
+
+    @app.get("/masterdata/pack")
+    def masterdata_pack() -> dict:
+        return load_masterdata_pack().model_dump(mode="json")
+
+    @app.get("/masterdata")
+    def masterdata_standing() -> dict:
+        standing = masterdata_service.standing()
+        return {
+            "label": standing["label"],
+            "source_version_id": standing["source_version_id"],
+            "state": standing["state"].model_dump(mode="json"),
+        }
+
+    @app.post("/masterdata/versions", status_code=201)
+    def strike_masterdata_version(body: StrikeMasterDataRequest) -> dict:
+        try:
+            version = masterdata_service.strike_version(
+                body.label, body.state, body.edited_by, body.edited_on
+            )
+        except MasterDataValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return masterdata_service.version_view(version)
+
+    @app.get("/masterdata/versions")
+    def list_masterdata_versions() -> dict:
+        return {
+            "versions": [
+                masterdata_service.version_view(v)
+                for v in store.list_master_data_versions()
+            ]
+        }
+
+    @app.get("/masterdata/versions/{version_id}")
+    def get_masterdata_version(version_id: str) -> dict:
+        try:
+            version = masterdata_service.get_version(version_id)
+        except MasterDataNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return masterdata_service.version_view(version)
+
+    @app.get("/masterdata/coverage/{commodity}/{market}")
+    def masterdata_coverage(
+        commodity: str,
+        market: str,
+        as_of: date = Query(...),
+        version_id: str | None = Query(None),
+    ) -> dict:
+        try:
+            return masterdata_service.coverage(
+                commodity, market, as_of, version_id=version_id
+            )
+        except MasterDataNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except MasterDataValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/masterdata/verify")
+    def verify_masterdata_endpoint() -> dict:
+        return {"problems": verify_masterdata(store)}
 
     return app
