@@ -1088,6 +1088,104 @@ desk still runs on named people, and a determined
 impersonator is an organisational problem, not one
 this layer claims to solve.
 
+## What Round 16 adds
+
+Identity-shaped roles, market scopes and the access
+audit (F20-AS1), and master data & market calendars
+(F20-AD1) — the two layers the desk's numbers needed
+before they travel: who may see which market's
+figures, with a record of every read; and a governed
+answer to "when did that market actually sit", because
+a holiday is what *missing data* means.
+
+- **Role scopes (F20-AS1)** — an **access pack**
+  (`access/pack.py`, genesis v2026.10.1, fail-closed
+  loader) stating three roles as data: **desk head**
+  (every surface, grants, master-data edits, the audit
+  read), **trader** (forecast, dashboard and export
+  reads inside their grant's market scope), **viewer**
+  (forecast and dashboard reads in scope — no export).
+  A principal's role and scope stand only as a
+  **grant** (`GRT-`): an insert-only act chained over
+  the subject's folded name — grant, narrow, repeal —
+  where standing is the chain's head, never a stored
+  column. Grants are struck by a standing desk head
+  over other names; the book's first grant is struck
+  by its own subject as desk head over all markets
+  and flagged **bootstrap** on its face, because an
+  empty book has no one else. A scope names only
+  markets the catalogue carries.
+- **Governed reads, existence-hiding** — the official
+  forecast read, the dashboard assembly read and the
+  assembly's rendered page (the **export** surface)
+  are governed when a read names its principal in the
+  `x-desk-actor` header: judged under the standing
+  grant on every market the artefact spans (a
+  dashboard hides if *any* panel's market is out of
+  scope), recorded as an **access entry** (`ACC-`)
+  before the answer, and every refusal — unknown
+  principal, role barred from the surface, market out
+  of scope — answered **exactly as if the artefact
+  did not exist**: the same 404, the same body as a
+  missing id. The reason is recorded on the entry,
+  never in the answer. The **audit log** (`ALOG-`)
+  folds the entries in strike order, numbered from 1
+  with no gaps, and the verifier re-derives the whole
+  layer: chains, granter discipline re-judged in
+  strike order, every entry's outcome re-judged under
+  the grant its face names, every log re-folded.
+- **Master data & calendars (F20-AD1)** — the
+  catalogue's facts restated as versioned data:
+  every market's **calendar** (weekly pattern,
+  holidays, extra operating days), commodity and
+  market display names, and the unit statements
+  (INR per quintal, quintals, ten quintals to the
+  tonne). The genesis state is the catalogue's own; a
+  **version** (`MDV-`) is struck whole by a named
+  editor holding a standing desk-head grant, carries
+  a field-by-field **diff** against the version it
+  supersedes (re-derived by the verifier), and stands
+  on strike — authorship and versioning are the gate;
+  the AD2 chain governs the desk's policy limits, not
+  a market's holiday list. A strike that changes
+  nothing is refused, as is a calendar naming one
+  date as both a holiday and an extra session.
+  **Coverage re-derivation** then answers the
+  acceptance question directly: the thin pack's
+  windows (7/30/90/365) recomputed under two states,
+  with every date whose operating status changed
+  named per window — a Christmas closure moves
+  kanpur's verdicts by exactly that date and nothing
+  else, and a display-name edit moves no verdict at
+  all.
+- **Surfaces** — migration 0016 (both dialects);
+  `GET /access/pack`, `POST/GET /access/grants`,
+  `GET /access/standing/{subject}`,
+  `GET /access/entries`, `POST/GET /access/logs`
+  (+ `/{id}`), `GET /access/verify`;
+  `GET /masterdata/pack`, `GET /masterdata`,
+  `POST/GET /masterdata/versions` (+ `/{id}`),
+  `GET /masterdata/coverage/{commodity}/{market}`,
+  `GET /masterdata/verify`; the `fmcg-agent-access`
+  and `fmcg-agent-masterdata` CLIs. The demo opens the
+  grant book, watches an out-of-scope read hide, and
+  re-derives kanpur's coverage under the closure.
+
+Honest positions, stated plainly: a read that names
+no principal is the **local posture** — the console's
+own reads, the demo, this repo's harness — and
+proceeds unjudged and unrecorded, as the desk's reads
+always have; the governed surfaces are for reads that
+carry a name, and the pack states that boundary
+rather than pretending the header is authentication.
+It is not: the `x-desk-actor` header is a stated
+identity claim, and authenticating it (SSO, signed
+tokens) is deployment work this blueprint does not
+fake. Name folding remains a discipline aid, not
+identity proof. And a calendar is reference data: it
+moves what coverage *expects*, never what history
+*recorded*.
+
 ## Honest status
 
 - **Built and gated in R1:** the spine, generator + manifest, store port +
@@ -1322,10 +1420,37 @@ this layer claims to solve.
   discipline, activation, log folding, annotations and
   the desk verifier; the truth-isolation scan now
   covers the desk package too.
-- **Not yet built:** R16 onward on the round map (the
-  F20-RT1 red-team pass next). The round map runs to
-  R20 and continues past it until the production bar is
-  met.
+- **Built and gated in R16:** the access pack (the
+  trader / desk head / viewer roles and their surfaces
+  as versioned data, genesis v2026.10.1, fail-closed
+  loader), principal grants as chained insert-only
+  acts over a folded name (bootstrap flagged on its
+  face, desk-head granters, repeals, catalogue-checked
+  scopes), governed reads on the forecast, dashboard
+  and export surfaces judged under the standing grant
+  and answered existence-hiding (the identical 404 a
+  missing artefact gets), access entries struck in
+  gapless sequence and the audit log folded from them,
+  both layers' verifiers re-deriving chains, granter
+  discipline, outcomes and folds; and the master data
+  pack with the catalogue restated as a genesis state,
+  versions struck whole by named desk-head editors
+  with field-by-field diffs, calendar arithmetic
+  (pattern minus holidays plus extra operating days),
+  and coverage re-derivation that names the changed
+  dates per thin-pack window, migration 0016, the
+  access and master data API surfaces, the
+  `fmcg-agent-access` and `fmcg-agent-masterdata`
+  CLIs and the demo walk. Eval gate v15 adds
+  zero-tolerance counters for grant discipline, the
+  read-judgement walk, the audit fold, master data
+  diffs, calendar re-derivation and both verifiers;
+  the truth-isolation scan now covers the access and
+  masterdata packages too.
+- **Not yet built:** R17 onward on the round map (the
+  F20-AS2 injection-quarantine and red-team pass
+  next). The round map runs to R20 and continues past
+  it until the production bar is met.
 - **The dataset in this repo is generated in-repo for the blueprint** — gold
   by construction, so the engine can be graded against a known future.
 - **Live models are stub-tested until configured:** hosted profiles fail

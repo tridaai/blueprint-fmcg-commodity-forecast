@@ -384,6 +384,51 @@ LangGraph state machine whose transitions are stored artefacts:
   diffs recomputed, acts re-judged, folds rebuilt — so
   a tampered version, act or log is flagged, never
   passed silently.
+- **identity, scopes, access audit** (R16, landed):
+  who may see what, and the record of every governed
+  read (F20-AS1). A versioned access pack states the
+  three roles (desk head, trader, viewer) and the
+  surfaces each may use as data. A principal's role
+  and market scope stand only as a grant artefact —
+  insert-only, chained by supersession over the
+  subject's folded name, standing as the chain's
+  head; grants are struck by a standing desk head over
+  other names, the book's first by its own subject,
+  flagged bootstrap. The governed surfaces are the
+  official forecast read, the dashboard assembly read
+  and the assembly's HTML (the export surface): when
+  a read names its principal (`x-desk-actor`), the
+  service judges it under the standing grant on every
+  market the artefact spans and strikes an access
+  entry before the answer; a refused read is answered
+  exactly as if the artefact did not exist, its reason
+  recorded on the entry alone. Unnamed reads keep the
+  local posture — unjudged, unrecorded — a boundary
+  the pack states. The audit log folds the entries in
+  strike order, gapless from 1, and the verifier
+  re-derives chains, granter discipline in strike
+  order, every outcome under the grant its entry
+  names, and every log's fold.
+- **master data & market calendars** (R16, landed):
+  the desk's reference data as versioned data with
+  named editors (F20-AD1). The genesis state restates
+  the catalogue: one calendar per market (weekly
+  pattern from its commodity's reporting pattern, no
+  holidays, no extra days), display names, and the
+  unit statements. A version is struck whole by an
+  editor holding a standing desk-head grant under the
+  access pack, supersedes the standing version by
+  link, carries a field-by-field diff over flattened
+  paths that the verifier re-derives from the two
+  states alone, and stands on strike; an empty strike
+  is refused. A day's operating status is computed
+  from a calendar — pattern, minus holidays, plus
+  extra operating days — and coverage verdicts pin to
+  a stated state: the re-derivation walk recomputes
+  the thin pack's windows under two states and names
+  every changed date per window, so a calendar edit's
+  blast radius is read, not guessed. Calendars move
+  expectations only; stored observations never move.
 
 ## Failure posture
 

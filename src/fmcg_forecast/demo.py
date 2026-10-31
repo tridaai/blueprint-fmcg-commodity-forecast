@@ -941,6 +941,72 @@ def main() -> int:
           f"pin to the chili forecast itself; the whole desk "
           f"layer re-performs with "
           f"{len(verify_desk(store))} problems")
+
+    print("\n--- identity, scopes, access audit & master data (R16, F20-AS1 + F20-AD1): who may see what, and when a market sat ---")
+    from fmcg_forecast.access.service import AccessService
+    from fmcg_forecast.access.verify import verify_access
+    from fmcg_forecast.masterdata.engine import genesis_state
+    from fmcg_forecast.masterdata.service import MasterDataService
+    from fmcg_forecast.masterdata.verify import verify_masterdata
+
+    access = AccessService(store)
+    access.strike_grant(
+        "d.kaur", "desk_head", None, "d.kaur", date(2026, 1, 2)
+    )
+    access.strike_grant(
+        "a.sharma", "trader", ["delhi_khari_baoli"], "d.kaur",
+        date(2026, 1, 2),
+    )
+    print("  the book opens with d.kaur's bootstrap grant (flagged "
+          "on its face); a.sharma is scoped to delhi_khari_baoli "
+          "alone")
+    seen = access.record_read(
+        "a.sharma", "forecast", "forecast", wheat.forecast_id,
+        ["delhi_khari_baoli"], wheat.as_of,
+    )
+    hidden = access.record_read(
+        "a.sharma", "forecast", "forecast", wheat2.forecast_id,
+        ["indore"], wheat2.as_of,
+    )
+    stranger = access.record_read(
+        "walk-in", "forecast", "forecast", wheat.forecast_id,
+        ["delhi_khari_baoli"], wheat.as_of,
+    )
+    print(f"  a.sharma reads the delhi forecast: {seen.outcome}; "
+          f"the indore forecast: {hidden.outcome} — over HTTP that "
+          f"is the same 404 a missing forecast gets; a name with "
+          f"no grant: {stranger.outcome}")
+    audit = access.strike_access_log(date(2026, 1, 31))
+    print(f"  the audit log {audit.log_id} folds "
+          f"{len(audit.entries)} recorded read(s), sequence "
+          f"gapless from 1 — the hidden attempts are on the "
+          f"record too; the layer re-performs with "
+          f"{len(verify_access(store))} problems")
+    masterdata = MasterDataService(store)
+    calendar_state = genesis_state().model_copy(deep=True)
+    for calendar in calendar_state.calendars:
+        if calendar.market == "kanpur":
+            calendar.holidays = [date(2025, 12, 25)]
+    closure = masterdata.strike_version(
+        "christmas-closure", calendar_state, "d.kaur",
+        date(2026, 1, 2),
+    )
+    report = masterdata.coverage(
+        "wheat", "kanpur", date(2025, 12, 31),
+        version_id=closure.version_id,
+    )
+    window30 = next(
+        w for w in report["windows"] if w["window_days"] == 30
+    )
+    print(f"  d.kaur strikes master data version "
+          f"{closure.label!r}: kanpur closed 2025-12-25 — the "
+          f"30-day coverage verdict re-derives from "
+          f"{window30['before']['operating_days']} expected days "
+          f"to {window30['after']['operating_days']}, and the "
+          f"only changed date named is "
+          f"{window30['changed_operating_dates'][0]['date']}; "
+          f"the layer re-performs with "
+          f"{len(verify_masterdata(store))} problems")
     print(f"sealed truth rows stored: {truth_store.count()} (readable only via the truth store)")
     return 0
 
