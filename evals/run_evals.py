@@ -383,6 +383,39 @@ F20-AD2 + F20-CA2 + F20-CA1), also zero-tolerance:
   version inserted around the service with a fabricated
   diff that the verifier passes.
 
+Round 16 counters (identity, scopes, access audit —
+F20-AS1; master data & market calendars — F20-AD1),
+also zero-tolerance:
+
+- access_grant_errors: a grant the pack refuses standing
+  anyway (a non-bootstrap self-grant, a grant struck by
+  a role that may not grant, a scope naming an unknown
+  market), or the standing fold disagreeing with the
+  chain's head over a name.
+- access_scope_errors: a scripted walk of governed reads
+  whose judged outcomes disagree with the pack — an
+  in-scope read hidden, an out-of-scope read allowed, a
+  role-barred surface allowed, an unknown or repealed
+  principal allowed.
+- access_audit_errors: the audit log's fold differing
+  from the recorded entries — count, order or gapless
+  sequence — the layer failing to re-perform clean, or
+  a forged entry (flipped outcome, honestly addressed)
+  the verifier passes.
+- masterdata_diff_errors: a version striking without
+  the master-data right, an empty strike standing, or a
+  struck version whose diff is not exactly the fields
+  its edit moved.
+- masterdata_coverage_errors: a calendar change whose
+  re-derived verdicts move outside the windows
+  containing a changed date, move by anything but the
+  changed dates, or a display-name edit (or a holiday
+  on a day the market never sits) moving any verdict.
+- masterdata_verifier_errors: the master data layer
+  failing to re-perform clean after the section's
+  strikes, or a version inserted around the service
+  with a fabricated diff that the verifier passes.
+
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
 
@@ -427,6 +460,8 @@ def truth_isolation_violations() -> int:
         + list((base / "console").rglob("*.py"))
         + list((base / "geo").rglob("*.py"))
         + list((base / "desk").rglob("*.py"))
+        + list((base / "access").rglob("*.py"))
+        + list((base / "masterdata").rglob("*.py"))
     )
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -543,6 +578,12 @@ def main() -> int:
         "desk_decision_log_errors": 0,
         "desk_annotation_errors": 0,
         "desk_verifier_errors": 0,
+        "access_grant_errors": 0,
+        "access_scope_errors": 0,
+        "access_audit_errors": 0,
+        "masterdata_diff_errors": 0,
+        "masterdata_coverage_errors": 0,
+        "masterdata_verifier_errors": 0,
     }
 
     # --- planted events, measured seasonally-matched ---------------
@@ -3912,7 +3953,228 @@ def main() -> int:
     ):
         counters["desk_verifier_errors"] += 1
 
-    print("Round 15 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio + R7 prompt-to-dashboard + R8 buy signals & coverage planning + R9 alerting, subscriptions & escalation + R10 thin-data depth & assisted intake + R11 production data plane + R12 forecast-ops analytics & shock grading + R13 operator console: review queue & rejection, event triage gate, coverage pre-flight, phone action parity + R14 geospatial basis & netting: basis bands, desk cost lines, landed comparisons, market map and weather/event overlay + R15 desk policy, approvals, config: pack versions with diffs, approval chains, the gapless decision log, comments and follow-up tasks)")
+    # --- Round 16: identity, scopes, access audit (F20-AS1) ------
+    # --- and master data & market calendars (F20-AD1) ------------
+    # A grant book on the eval store; a scripted walk of governed
+    # reads graded outcome by outcome; the audit fold checked
+    # against the record; master data versions struck by a desk
+    # head only, their diffs graded, and a kanpur holiday's
+    # coverage re-derivation graded date by date.
+    from datetime import date as _date16
+
+    from fmcg_forecast.access.models import (
+        entry_content_id as _entry_id16,
+    )
+    from fmcg_forecast.access.service import (
+        AccessService as _AccessService16,
+    )
+    from fmcg_forecast.access.service import (
+        AccessValidationError as _AccessRefused16,
+    )
+    from fmcg_forecast.access.verify import (
+        verify_access as _verify_access16,
+    )
+    from fmcg_forecast.masterdata.engine import (
+        genesis_state as _genesis16,
+    )
+    from fmcg_forecast.masterdata.models import (
+        master_data_version_content_id as _mdv_id16,
+    )
+    from fmcg_forecast.masterdata.service import (
+        MasterDataService as _MasterDataService16,
+    )
+    from fmcg_forecast.masterdata.service import (
+        MasterDataValidationError as _MasterDataRefused16,
+    )
+    from fmcg_forecast.masterdata.verify import (
+        verify_masterdata as _verify_masterdata16,
+    )
+
+    def _refused16(fn) -> bool:
+        try:
+            fn()
+        except (_AccessRefused16, _MasterDataRefused16):
+            return True
+        return False
+
+    _access16 = _AccessService16(store)
+    _jan16 = _date16(2026, 1, 2)
+    _access16.strike_grant(
+        "d.kaur", "desk_head", None, "d.kaur", _jan16
+    )
+    _access16.strike_grant(
+        "a.sharma", "trader", ["indore"], "d.kaur", _jan16
+    )
+    _access16.strike_grant(
+        "m.iyer", "viewer", ["indore", "kanpur"], "d.kaur", _jan16
+    )
+
+    # grant discipline: refused where the pack refuses
+    for _strike16 in (
+        lambda: _access16.strike_grant(
+            "x.late", "desk_head", None, "x.late", _jan16
+        ),
+        lambda: _access16.strike_grant(
+            "x.late", "viewer", ["indore"], "a.sharma", _jan16
+        ),
+        lambda: _access16.strike_grant(
+            "x.late", "viewer", ["atlantis"], "d.kaur", _jan16
+        ),
+        lambda: _access16.strike_grant(
+            "d.kaur", "viewer", None, "d.kaur", _jan16
+        ),
+    ):
+        if not _refused16(_strike16):
+            counters["access_grant_errors"] += 1
+    # the fold: narrowing supersedes, names fold
+    _access16.strike_grant(
+        "a.sharma", "trader", ["kanpur"], "d.kaur", _date16(2026, 2, 1)
+    )
+    if _access16.standing_grant("A. Sharma").markets != ["kanpur"]:
+        counters["access_grant_errors"] += 1
+    _access16.strike_grant(
+        "a.sharma", "trader", ["indore"], "d.kaur", _date16(2026, 2, 2)
+    )
+    if _access16.standing_grant("a.sharma").markets != ["indore"]:
+        counters["access_grant_errors"] += 1
+
+    # the scripted walk: every outcome graded
+    _walk16 = [
+        ("a.sharma", "forecast", ["indore"], "allowed"),
+        ("a.sharma", "forecast", ["kanpur"], "hidden_out_of_scope"),
+        ("m.iyer", "dashboard", ["indore", "kanpur"], "allowed"),
+        ("m.iyer", "export", ["indore"], "hidden_role_surface"),
+        ("ghost", "forecast", ["indore"], "hidden_unknown_principal"),
+        ("d.kaur", "export", ["kanpur", "guntur", "unjha"], "allowed"),
+    ]
+    for _who16, _surface16, _markets16, _expected16 in _walk16:
+        _entry16 = _access16.record_read(
+            _who16,
+            _surface16,
+            "forecast" if _surface16 == "forecast"
+            else "dashboard_assembly",
+            _wheat15.forecast_id
+            if _surface16 == "forecast"
+            else "DASM-eval",
+            _markets16,
+            _date16(2025, 12, 31),
+        )
+        if _entry16.outcome != _expected16:
+            counters["access_scope_errors"] += 1
+    # a repeal hides the name from its next read on
+    _access16.strike_grant(
+        "m.iyer", None, None, "d.kaur", _date16(2026, 3, 1)
+    )
+    _repealed16 = _access16.record_read(
+        "m.iyer", "forecast", "forecast", _wheat15.forecast_id,
+        ["indore"], _date16(2025, 12, 31),
+    )
+    if _repealed16.outcome != "hidden_unknown_principal":
+        counters["access_scope_errors"] += 1
+
+    # the audit log folds the record with no gaps
+    _log16 = _access16.strike_access_log(_date16(2026, 3, 31))
+    if [line.seq for line in _log16.entries] != list(
+        range(1, len(_log16.entries) + 1)
+    ):
+        counters["access_audit_errors"] += 1
+    if (
+        _log16.entries[-1].entry_id
+        != store.list_access_entries()[-1].entry_id
+    ):
+        counters["access_audit_errors"] += 1
+    if _verify_access16(store):
+        counters["access_audit_errors"] += 1
+    # a forged entry — flipped outcome, gap sequence,
+    # honestly addressed — is named by the verifier
+    _last16 = store.list_access_entries()[-1]
+    _forged16 = _last16.model_copy(
+        update={"outcome": "allowed", "seq": _last16.seq + 100}
+    )
+    _forged16 = _forged16.model_copy(
+        update={"entry_id": _entry_id16(_forged16)}
+    )
+    store.insert_access_entry(_forged16)
+    if not _verify_access16(store):
+        counters["access_audit_errors"] += 1
+
+    # master data: strikes judged, diffs graded
+    _md16 = _MasterDataService16(store)
+    _state16 = _genesis16().model_copy(deep=True)
+    for _cal16 in _state16.calendars:
+        if _cal16.market == "kanpur":
+            _cal16.holidays = [_date16(2025, 12, 25)]
+    if not _refused16(
+        lambda: _md16.strike_version(
+            "closure", _state16, "a.sharma", _jan16
+        )
+    ):
+        counters["masterdata_diff_errors"] += 1
+    _v16 = _md16.strike_version(
+        "christmas-closure", _state16, "d.kaur", _jan16
+    )
+    if [d.field for d in _v16.diff] != ["calendars.kanpur.holidays"]:
+        counters["masterdata_diff_errors"] += 1
+    if not _refused16(
+        lambda: _md16.strike_version(
+            "again", _md16.standing_state(), "d.kaur", _jan16
+        )
+    ):
+        counters["masterdata_diff_errors"] += 1
+    if _verify_masterdata16(store):
+        counters["masterdata_verifier_errors"] += 1
+
+    # the holiday re-derives kanpur's coverage for exactly
+    # the windows containing it, by exactly one day
+    _report16 = _md16.coverage(
+        "wheat", "kanpur", _date16(2025, 12, 31),
+        version_id=_v16.version_id,
+    )
+    for _window16 in _report16["windows"]:
+        if [c["date"] for c in _window16["changed_operating_dates"]] != [
+            _date16(2025, 12, 25)
+        ]:
+            counters["masterdata_coverage_errors"] += 1
+        if (
+            _window16["after"]["operating_days"]
+            != _window16["before"]["operating_days"] - 1
+        ):
+            counters["masterdata_coverage_errors"] += 1
+        if not _window16["verdict_changed"]:
+            counters["masterdata_coverage_errors"] += 1
+    # a display edit moves no verdict; the kanpur calendar
+    # says nothing about bengaluru's
+    _display16 = _genesis16().model_copy(deep=True)
+    _display16.commodity_displays["chili"] = "Dry Red Chili"
+    _v16b = _md16.strike_version(
+        "chili-display", _display16, "d.kaur", _jan16
+    )
+    _report16b = _md16.coverage(
+        "wheat", "kanpur", _date16(2025, 12, 31),
+        version_id=_v16b.version_id,
+    )
+    _coffee16 = _md16.coverage(
+        "coffee", "bengaluru", _date16(2025, 12, 31),
+        version_id=_v16.version_id,
+    )
+    for _report16x in (_report16b, _coffee16):
+        for _window16 in _report16x["windows"]:
+            if _window16["verdict_changed"]:
+                counters["masterdata_coverage_errors"] += 1
+            if _window16["changed_operating_dates"]:
+                counters["masterdata_coverage_errors"] += 1
+    # a tampered version is named by the verifier
+    _tampered16 = _v16.model_copy(
+        update={"diff": [], "label": "tampered"}
+    )
+    _tampered16 = _tampered16.model_copy(
+        update={"version_id": _mdv_id16(_tampered16)}
+    )
+    store.insert_master_data_version(_tampered16)
+    if not _verify_masterdata16(store):
+        counters["masterdata_verifier_errors"] += 1
+
+    print("Round 15 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio + R7 prompt-to-dashboard + R8 buy signals & coverage planning + R9 alerting, subscriptions & escalation + R10 thin-data depth & assisted intake + R11 production data plane + R12 forecast-ops analytics & shock grading + R13 operator console: review queue & rejection, event triage gate, coverage pre-flight, phone action parity + R14 geospatial basis & netting: basis bands, desk cost lines, landed comparisons, market map and weather/event overlay + R15 desk policy, approvals, config: pack versions with diffs, approval chains, the gapless decision log, comments and follow-up tasks + R16 identity, scopes, access audit & master data: role-scoped governed reads, existence hiding, the gapless audit fold, versioned market calendars and re-derived coverage)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]

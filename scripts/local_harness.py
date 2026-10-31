@@ -22,7 +22,14 @@ the standing pack read, a proposal landing proposed with its
 diff, the two-person chain refusing its own proposer, the
 completing sign-off standing the version, the gapless
 decision log, and a comment and follow-up task pinned to the
-forecast.
+forecast. Round 16 adds identity, scopes, the access audit,
+and master data: the access pack, the bootstrap grant landing
+flagged, a scoped trader's in-scope read served and their
+out-of-scope read hidden as the same 404 a missing forecast
+gets, the unnamed local posture intact, the audit log folding
+gaplessly, a master data version struck by the desk head (and
+refused to the trader), and the kanpur holiday re-deriving
+coverage for exactly the windows containing it.
 """
 
 from __future__ import annotations
@@ -758,6 +765,115 @@ def main() -> int:
         r = client.get(f"{BASE}/desk/verify")
         checks.append(
             ("desk layer re-performs clean", r.status_code == 200 and r.json()["problems"] == [])
+        )
+        # --- Round 16: identity, scopes, audit, master data over HTTP -----
+        r = client.get(f"{BASE}/access/pack")
+        checks.append(
+            ("the access pack reads",
+             r.status_code == 200 and r.json()["version"] == "2026.10.1")
+        )
+        r = client.post(
+            f"{BASE}/access/grants",
+            json={"subject": "d.kaur", "role": "desk_head",
+                  "granted_by": "d.kaur", "granted_on": "2026-01-02"},
+        )
+        checks.append(
+            ("the bootstrap grant lands flagged",
+             r.status_code == 201 and r.json()["bootstrap"] is True)
+        )
+        r = client.post(
+            f"{BASE}/access/grants",
+            json={"subject": "a.sharma", "role": "trader",
+                  "markets": ["indore"], "granted_by": "d.kaur",
+                  "granted_on": "2026-01-02"},
+        )
+        checks.append(
+            ("a scoped trader grant lands",
+             r.status_code == 201 and r.json()["markets"] == ["indore"])
+        )
+        r = client.get(
+            f"{BASE}/forecasts/{forecast_id}",
+            headers={"x-desk-actor": "a.sharma"},
+        )
+        checks.append(
+            ("an in-scope governed read is served", r.status_code == 200)
+        )
+        r = client.get(
+            f"{BASE}/forecasts/{groundnut_id}",
+            headers={"x-desk-actor": "a.sharma"},
+        )
+        checks.append(
+            ("an out-of-scope governed read hides as a missing forecast",
+             r.status_code == 404
+             and r.json() == {"detail": f"unknown forecast {groundnut_id}"})
+        )
+        r = client.get(f"{BASE}/forecasts/{groundnut_id}")
+        checks.append(
+            ("an unnamed read keeps the local posture", r.status_code == 200)
+        )
+        r = client.get(f"{BASE}/access/entries")
+        checks.append(
+            ("the governed reads are on the audit record",
+             r.status_code == 200
+             and [e["outcome"] for e in r.json()["entries"]]
+             == ["allowed", "hidden_out_of_scope"])
+        )
+        r = client.post(
+            f"{BASE}/access/logs", json={"struck_on": "2026-01-31"}
+        )
+        checks.append(
+            ("the audit log folds gaplessly",
+             r.status_code == 201
+             and [line["seq"] for line in r.json()["entries"]] == [1, 2]
+             and r.json()["upto_seq"] == 2)
+        )
+        r = client.get(f"{BASE}/access/verify")
+        checks.append(
+            ("access layer re-performs clean", r.status_code == 200 and r.json()["problems"] == [])
+        )
+        r = client.get(f"{BASE}/masterdata")
+        md_state = r.json()["state"] if r.status_code == 200 else {}
+        for calendar in md_state.get("calendars", []):
+            if calendar["market"] == "kanpur":
+                calendar["holidays"] = ["2025-12-25"]
+        r = client.post(
+            f"{BASE}/masterdata/versions",
+            json={"label": "christmas-closure", "state": md_state,
+                  "edited_by": "a.sharma", "edited_on": "2026-01-02"},
+        )
+        checks.append(
+            ("a trader's master data strike is refused",
+             r.status_code == 422)
+        )
+        r = client.post(
+            f"{BASE}/masterdata/versions",
+            json={"label": "christmas-closure", "state": md_state,
+                  "edited_by": "d.kaur", "edited_on": "2026-01-02"},
+        )
+        md_version_id = r.json()["version_id"] if r.status_code == 201 else None
+        checks.append(
+            ("the desk head's master data version lands with its diff",
+             r.status_code == 201
+             and [d["field"] for d in r.json()["diff"]]
+             == ["calendars.kanpur.holidays"])
+        )
+        r = client.get(
+            f"{BASE}/masterdata/coverage/wheat/kanpur",
+            params={"as_of": "2025-12-31", "version_id": md_version_id},
+        )
+        checks.append(
+            ("the holiday re-derives coverage for its windows only",
+             r.status_code == 200
+             and all(
+                 w["verdict_changed"]
+                 and [c["date"] for c in w["changed_operating_dates"]]
+                 == ["2025-12-25"]
+                 for w in r.json()["windows"]
+             ))
+        )
+        r = client.get(f"{BASE}/masterdata/verify")
+        checks.append(
+            ("master data layer re-performs clean", r.status_code == 200 and r.json()["problems"] == [])
         )
         for name, ok in checks:
             print(f"  {'PASS' if ok else 'FAIL'}  {name}")

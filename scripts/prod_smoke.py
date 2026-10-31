@@ -36,11 +36,20 @@ before it serves:
   artefacts struck on a full SQLite store over the same
   record (dialect parity, gap 0), with the layer
   re-performing clean on both profiles.
+- the R16 access & master data layers work on this
+  profile too: grants struck, governed reads recorded,
+  the audit log folded, a master data version struck
+  and its coverage re-derivation performed on the
+  Postgres store are byte-identical to the same walk
+  on a full SQLite store over the same record (dialect
+  parity, gap 0), with both layers re-performing clean
+  on both profiles.
 
 Usage: DATABASE_URL=postgresql://... python scripts/prod_smoke.py
 Exits 0 when every check passes, 1 otherwise.
 """
 
+import json
 import os
 import sys
 import tempfile
@@ -428,6 +437,82 @@ def main() -> int:
                         f"desk parity: the {name} differs across "
                         "profiles"
                     )
+
+            # --- R16: access & master data on this profile --------
+            from fmcg_forecast.access.service import AccessService
+            from fmcg_forecast.access.verify import verify_access
+            from fmcg_forecast.masterdata.engine import genesis_state
+            from fmcg_forecast.masterdata.service import (
+                MasterDataService,
+            )
+            from fmcg_forecast.masterdata.verify import (
+                verify_masterdata,
+            )
+
+            def _access_walk(store):
+                access = AccessService(store)
+                access.strike_grant(
+                    "d.kaur", "desk_head", None, "d.kaur",
+                    date(2026, 1, 2),
+                )
+                access.strike_grant(
+                    "a.sharma", "trader", ["indore"], "d.kaur",
+                    date(2026, 1, 2),
+                )
+                access.record_read(
+                    "a.sharma", "forecast", "forecast", "FCST-smoke",
+                    ["indore"], date(2025, 12, 31),
+                )
+                access.record_read(
+                    "a.sharma", "forecast", "forecast", "FCST-smoke",
+                    ["kanpur"], date(2025, 12, 31),
+                )
+                log = access.strike_access_log(date(2026, 1, 31))
+                md = MasterDataService(store)
+                state = genesis_state().model_copy(deep=True)
+                for calendar in state.calendars:
+                    if calendar.market == "kanpur":
+                        calendar.holidays = [date(2025, 12, 25)]
+                version = md.strike_version(
+                    "christmas-closure", state, "d.kaur",
+                    date(2026, 1, 2),
+                )
+                report = md.coverage(
+                    "wheat", "kanpur", date(2025, 12, 31),
+                    version_id=version.version_id,
+                )
+                return (
+                    [g.model_dump(mode="json")
+                     for g in store.list_principal_grants()],
+                    [e.model_dump(mode="json")
+                     for e in store.list_access_entries()],
+                    log.model_dump(mode="json"),
+                    md.version_view(version),
+                    json.dumps(report, default=str, sort_keys=True),
+                )
+
+            pg_access_walk = _access_walk(store)
+            lite_access_walk = _access_walk(lite)
+            if verify_access(store) or verify_masterdata(store):
+                problems.append(
+                    "access/master data layers do not verify on "
+                    f"Postgres: {verify_access(store)} "
+                    f"{verify_masterdata(store)}"
+                )
+            if verify_access(lite) or verify_masterdata(lite):
+                problems.append(
+                    "access/master data layers do not verify on "
+                    f"SQLite: {verify_access(lite)} "
+                    f"{verify_masterdata(lite)}"
+                )
+            if pg_access_walk != lite_access_walk:
+                problems.append(
+                    "access parity: grants, entries, log, version "
+                    "or coverage report differ across profiles"
+                )
+            print("access parity: grants, entries, audit log, "
+                  "master data version and coverage report "
+                  "identical across profiles (gap 0)")
         print("desk parity: version, decision, log, comment and "
               "task artefacts identical across profiles (gap 0)")
     finally:
