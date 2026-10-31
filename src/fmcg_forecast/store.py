@@ -80,6 +80,15 @@ from fmcg_forecast.access.models import (
     PrincipalGrant,
 )
 from fmcg_forecast.masterdata.models import MasterDataVersion
+from fmcg_forecast.integrations.models import (
+    BoardPack,
+    ExportJob,
+    ExportJobAct,
+    IntegrationToken,
+    TokenAct,
+    WebhookDelivery,
+    WebhookSubscription,
+)
 from fmcg_forecast.monitoring.models import MonitoringBoard, RunRecord
 from fmcg_forecast.screening.models import ScreeningRecord
 from fmcg_forecast.intake.models import IntakeCheckAct, IntakeEntry
@@ -437,6 +446,37 @@ class Store(Protocol):
         self, board_id: str
     ) -> MonitoringBoard | None: ...
     def list_monitoring_boards(self) -> list[MonitoringBoard]: ...
+    # -- integration surface (R19) --
+    def insert_integration_token(self, token: IntegrationToken) -> None: ...
+    def get_integration_token(
+        self, token_id: str
+    ) -> IntegrationToken | None: ...
+    def list_integration_tokens(self) -> list[IntegrationToken]: ...
+    def insert_token_act(self, act: TokenAct) -> None: ...
+    def list_token_acts(
+        self, token_id: str | None = None
+    ) -> list[TokenAct]: ...
+    def insert_webhook_subscription(
+        self, subscription: WebhookSubscription
+    ) -> None: ...
+    def get_webhook_subscription(
+        self, subscription_id: str
+    ) -> WebhookSubscription | None: ...
+    def list_webhook_subscriptions(self) -> list[WebhookSubscription]: ...
+    def insert_webhook_delivery(self, delivery: WebhookDelivery) -> None: ...
+    def list_webhook_deliveries(
+        self, subscription_id: str | None = None
+    ) -> list[WebhookDelivery]: ...
+    def insert_board_pack(self, pack: BoardPack) -> None: ...
+    def get_board_pack(self, pack_id: str) -> BoardPack | None: ...
+    def list_board_packs(self) -> list[BoardPack]: ...
+    def insert_export_job(self, job: ExportJob) -> None: ...
+    def get_export_job(self, job_id: str) -> ExportJob | None: ...
+    def list_export_jobs(self) -> list[ExportJob]: ...
+    def insert_export_job_act(self, act: ExportJobAct) -> None: ...
+    def list_export_job_acts(
+        self, job_id: str | None = None
+    ) -> list[ExportJobAct]: ...
     def close(self) -> None: ...
 
 
@@ -3194,6 +3234,198 @@ class SqlStore:
             MonitoringBoard.model_validate(json.loads(r[0]))
             for r in cur.fetchall()
         ]
+
+    # -- integration surface (R19) --------------------------------------
+    # Payload tables like every other artefact family: the
+    # id and the few columns a list folds by, the artefact
+    # itself as JSON. Inserts are plain (the service checks
+    # standing first where an address may already stand);
+    # a duplicate address is a programming error and the
+    # primary key says so.
+
+    def _insert_payload(self, sql: str, params: tuple) -> None:
+        self._conn.execute(self._q(sql), params)
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def _get_payload(self, sql: str, params: tuple):
+        cur = self._conn.execute(self._q(sql), params)
+        row = cur.fetchone()
+        return json.loads(row[0]) if row else None
+
+    def _list_payloads(self, sql: str, params: tuple = ()) -> list:
+        cur = self._conn.execute(self._q(sql), params)
+        return [json.loads(r[0]) for r in cur.fetchall()]
+
+    def insert_integration_token(self, token: IntegrationToken) -> None:
+        self._insert_payload(
+            "INSERT INTO integration_tokens (token_id, name, payload) "
+            "VALUES (?, ?, ?)",
+            (token.token_id, token.name, token.model_dump_json()),
+        )
+
+    def get_integration_token(
+        self, token_id: str
+    ) -> IntegrationToken | None:
+        payload = self._get_payload(
+            "SELECT payload FROM integration_tokens WHERE token_id = ?",
+            (token_id,),
+        )
+        return IntegrationToken.model_validate(payload) if payload else None
+
+    def list_integration_tokens(self) -> list[IntegrationToken]:
+        return [
+            IntegrationToken.model_validate(p)
+            for p in self._list_payloads(
+                "SELECT payload FROM integration_tokens ORDER BY token_id"
+            )
+        ]
+
+    def insert_token_act(self, act: TokenAct) -> None:
+        self._insert_payload(
+            "INSERT INTO token_acts (act_id, token_id, payload) "
+            "VALUES (?, ?, ?)",
+            (act.act_id, act.token_id, act.model_dump_json()),
+        )
+
+    def list_token_acts(
+        self, token_id: str | None = None
+    ) -> list[TokenAct]:
+        if token_id is None:
+            payloads = self._list_payloads(
+                "SELECT payload FROM token_acts ORDER BY act_id"
+            )
+        else:
+            payloads = self._list_payloads(
+                "SELECT payload FROM token_acts WHERE token_id = ? "
+                "ORDER BY act_id",
+                (token_id,),
+            )
+        return [TokenAct.model_validate(p) for p in payloads]
+
+    def insert_webhook_subscription(
+        self, subscription: WebhookSubscription
+    ) -> None:
+        self._insert_payload(
+            "INSERT INTO webhook_subscriptions "
+            "(subscription_id, name, payload) VALUES (?, ?, ?)",
+            (
+                subscription.subscription_id,
+                subscription.name,
+                subscription.model_dump_json(),
+            ),
+        )
+
+    def get_webhook_subscription(
+        self, subscription_id: str
+    ) -> WebhookSubscription | None:
+        payload = self._get_payload(
+            "SELECT payload FROM webhook_subscriptions "
+            "WHERE subscription_id = ?",
+            (subscription_id,),
+        )
+        return WebhookSubscription.model_validate(payload) if payload else None
+
+    def list_webhook_subscriptions(self) -> list[WebhookSubscription]:
+        return [
+            WebhookSubscription.model_validate(p)
+            for p in self._list_payloads(
+                "SELECT payload FROM webhook_subscriptions "
+                "ORDER BY subscription_id"
+            )
+        ]
+
+    def insert_webhook_delivery(self, delivery: WebhookDelivery) -> None:
+        self._insert_payload(
+            "INSERT INTO webhook_deliveries "
+            "(delivery_id, subscription_id, source_artefact_id, payload) "
+            "VALUES (?, ?, ?, ?)",
+            (
+                delivery.delivery_id,
+                delivery.subscription_id,
+                delivery.source_artefact_id,
+                delivery.model_dump_json(),
+            ),
+        )
+
+    def list_webhook_deliveries(
+        self, subscription_id: str | None = None
+    ) -> list[WebhookDelivery]:
+        if subscription_id is None:
+            payloads = self._list_payloads(
+                "SELECT payload FROM webhook_deliveries ORDER BY delivery_id"
+            )
+        else:
+            payloads = self._list_payloads(
+                "SELECT payload FROM webhook_deliveries "
+                "WHERE subscription_id = ? ORDER BY delivery_id",
+                (subscription_id,),
+            )
+        return [WebhookDelivery.model_validate(p) for p in payloads]
+
+    def insert_board_pack(self, pack: BoardPack) -> None:
+        self._insert_payload(
+            "INSERT INTO board_packs (pack_id, payload) VALUES (?, ?)",
+            (pack.pack_id, pack.model_dump_json()),
+        )
+
+    def get_board_pack(self, pack_id: str) -> BoardPack | None:
+        payload = self._get_payload(
+            "SELECT payload FROM board_packs WHERE pack_id = ?",
+            (pack_id,),
+        )
+        return BoardPack.model_validate(payload) if payload else None
+
+    def list_board_packs(self) -> list[BoardPack]:
+        return [
+            BoardPack.model_validate(p)
+            for p in self._list_payloads(
+                "SELECT payload FROM board_packs ORDER BY pack_id"
+            )
+        ]
+
+    def insert_export_job(self, job: ExportJob) -> None:
+        self._insert_payload(
+            "INSERT INTO export_jobs (job_id, payload) VALUES (?, ?)",
+            (job.job_id, job.model_dump_json()),
+        )
+
+    def get_export_job(self, job_id: str) -> ExportJob | None:
+        payload = self._get_payload(
+            "SELECT payload FROM export_jobs WHERE job_id = ?",
+            (job_id,),
+        )
+        return ExportJob.model_validate(payload) if payload else None
+
+    def list_export_jobs(self) -> list[ExportJob]:
+        return [
+            ExportJob.model_validate(p)
+            for p in self._list_payloads(
+                "SELECT payload FROM export_jobs ORDER BY job_id"
+            )
+        ]
+
+    def insert_export_job_act(self, act: ExportJobAct) -> None:
+        self._insert_payload(
+            "INSERT INTO export_job_acts (act_id, job_id, payload) "
+            "VALUES (?, ?, ?)",
+            (act.act_id, act.job_id, act.model_dump_json()),
+        )
+
+    def list_export_job_acts(
+        self, job_id: str | None = None
+    ) -> list[ExportJobAct]:
+        if job_id is None:
+            payloads = self._list_payloads(
+                "SELECT payload FROM export_job_acts ORDER BY act_id"
+            )
+        else:
+            payloads = self._list_payloads(
+                "SELECT payload FROM export_job_acts WHERE job_id = ? "
+                "ORDER BY act_id",
+                (job_id,),
+            )
+        return [ExportJobAct.model_validate(p) for p in payloads]
 
     def close(self) -> None:
         try:
