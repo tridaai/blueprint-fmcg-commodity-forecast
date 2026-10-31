@@ -76,6 +76,13 @@ from fmcg_forecast.geo.service import (
 )
 from fmcg_forecast.console.render import render_console, render_console_phone
 from fmcg_forecast.console.service import ConsoleService
+from fmcg_forecast.desk.engine import DeskError
+from fmcg_forecast.desk.pack import load_desk_pack
+from fmcg_forecast.desk.service import (
+    DeskNotFoundError,
+    DeskService,
+    DeskValidationError,
+)
 from fmcg_forecast.dashboards.pack import load_dashboard_pack
 from fmcg_forecast.dashboards.service import (
     DashboardNotFoundError,
@@ -387,6 +394,57 @@ class EnterCostLineRequest(BaseModel):
     note: str = ""
 
 
+class ProposePackVersionRequest(BaseModel):
+    label: str
+    pack: dict
+    proposed_by: str
+    proposed_on: date
+
+
+class OpenDecisionRequest(BaseModel):
+    kind: str
+    target_id: str
+    opened_by: str
+    opened_on: date
+    purpose: str
+
+
+class StrikeDecisionActRequest(BaseModel):
+    actor: str
+    role: str
+    outcome: str
+    decided_on: date
+    note: str = ""
+
+
+class StrikeDecisionLogRequest(BaseModel):
+    struck_on: date
+
+
+class AddCommentRequest(BaseModel):
+    target_kind: str
+    target_id: str
+    author: str
+    body: str
+    commented_on: date
+
+
+class OpenTaskRequest(BaseModel):
+    target_kind: str
+    target_id: str
+    title: str
+    opened_by: str
+    assignee: str
+    opened_on: date
+
+
+class StrikeTaskActRequest(BaseModel):
+    action: str
+    actor: str
+    acted_on: date
+    note: str = ""
+
+
 class StrikeBasisRequest(BaseModel):
     commodity: str
     as_of: date
@@ -467,9 +525,10 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     ingest_service = IngestService(store)
     analytics_service = AnalyticsService(store)
     geo_service = GeoService(store)
+    desk_service = DeskService(store)
     app = FastAPI(
         title="FMCG Commodity Forecast — Operations API",
-        version="0.14.0",
+        version="0.15.0",
         description="Read surfaces for the commodity price & driver store, "
         "the governed forecast surface, the backtest/accuracy surface, "
         "the sentiment surface, the event registry, the scenario "
@@ -497,7 +556,13 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
         "band, landed-cost comparisons that name a missing "
         "line instead of assuming it, and the schematic "
         "market map with its alert state and weather/event "
-        "overlay.",
+        "overlay, and the desk governance surface: the "
+        "policy pack that states the approval chains, "
+        "proposed as new versions with their diffs and "
+        "standing only through its own chain, the chain "
+        "decisions and their acts, the gapless decision "
+        "log, and comments and follow-up tasks pinned to "
+        "artefacts of record.",
     )
 
     @app.middleware("http")
@@ -2149,5 +2214,189 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     @app.get("/geo/verify")
     def verify_geo_endpoint() -> dict:
         return {"problems": geo_service.verify_all()}
+
+    # -- desk policy, approval chains, annotations (R15: F20-AD2, F20-CA2, F20-CA1) --
+
+    @app.get("/desk/pack")
+    def desk_pack() -> dict:
+        standing = desk_service.standing()
+        return {
+            "label": standing["label"],
+            "source_version_id": standing["source_version_id"],
+            "pack": standing["pack"].model_dump(mode="json"),
+        }
+
+    @app.get("/desk/pack/genesis")
+    def desk_pack_genesis() -> dict:
+        return load_desk_pack().model_dump(mode="json")
+
+    @app.post("/desk/policy-versions", status_code=201)
+    def propose_policy_version(body: ProposePackVersionRequest) -> dict:
+        try:
+            version = desk_service.propose_policy_version(
+                body.label, body.pack, body.proposed_by,
+                body.proposed_on,
+            )
+        except DeskValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return desk_service.policy_version_view(version.version_id)
+
+    @app.get("/desk/policy-versions")
+    def list_policy_versions() -> dict:
+        return {
+            "versions": [
+                v.model_dump(mode="json")
+                for v in desk_service.list_policy_versions()
+            ]
+        }
+
+    @app.get("/desk/policy-versions/{version_id}")
+    def get_policy_version(version_id: str) -> dict:
+        try:
+            return desk_service.policy_version_view(version_id)
+        except DeskNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/desk/decisions", status_code=201)
+    def open_decision(body: OpenDecisionRequest) -> dict:
+        try:
+            decision = desk_service.open_decision(
+                body.kind, body.target_id, body.opened_by,
+                body.opened_on, body.purpose,
+            )
+        except DeskValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return desk_service.decision_view(decision.decision_id)
+
+    @app.get("/desk/decisions")
+    def list_decisions(
+        kind: str | None = Query(None),
+        target_id: str | None = Query(None),
+    ) -> dict:
+        return {
+            "decisions": [
+                d.model_dump(mode="json")
+                for d in desk_service.list_decisions(kind, target_id)
+            ]
+        }
+
+    @app.get("/desk/decisions/{decision_id}")
+    def get_decision(decision_id: str) -> dict:
+        try:
+            return desk_service.decision_view(decision_id)
+        except DeskNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/desk/decisions/{decision_id}/acts", status_code=201)
+    def strike_decision_act(
+        decision_id: str, body: StrikeDecisionActRequest
+    ) -> dict:
+        try:
+            act = desk_service.strike_act(
+                decision_id, body.actor, body.role, body.outcome,
+                body.decided_on, body.note,
+            )
+        except DeskNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except DeskValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return act.model_dump(mode="json")
+
+    @app.post("/desk/decision-logs", status_code=201)
+    def strike_decision_log(body: StrikeDecisionLogRequest) -> dict:
+        try:
+            log = desk_service.strike_decision_log(body.struck_on)
+        except DeskError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return desk_service.decision_log_view(log.log_id)
+
+    @app.get("/desk/decision-logs")
+    def list_decision_logs() -> dict:
+        return {
+            "logs": [
+                log.model_dump(mode="json")
+                for log in desk_service.list_decision_logs()
+            ]
+        }
+
+    @app.get("/desk/decision-logs/{log_id}")
+    def get_decision_log(log_id: str) -> dict:
+        try:
+            return desk_service.decision_log_view(log_id)
+        except DeskNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/desk/comments", status_code=201)
+    def add_comment(body: AddCommentRequest) -> dict:
+        try:
+            comment = desk_service.add_comment(
+                body.target_kind, body.target_id, body.author,
+                body.body, body.commented_on,
+            )
+        except DeskValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return comment.model_dump(mode="json")
+
+    @app.get("/desk/comments")
+    def list_comments(
+        target_kind: str = Query(...), target_id: str = Query(...)
+    ) -> dict:
+        return {
+            "comments": [
+                c.model_dump(mode="json")
+                for c in desk_service.list_comments(
+                    target_kind, target_id
+                )
+            ]
+        }
+
+    @app.post("/desk/tasks", status_code=201)
+    def open_task(body: OpenTaskRequest) -> dict:
+        try:
+            task = desk_service.open_task(
+                body.target_kind, body.target_id, body.title,
+                body.opened_by, body.assignee, body.opened_on,
+            )
+        except DeskValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return desk_service.task_view(task.task_id)
+
+    @app.get("/desk/tasks")
+    def list_tasks(
+        target_kind: str | None = Query(None),
+        target_id: str | None = Query(None),
+    ) -> dict:
+        return {
+            "tasks": [
+                t.model_dump(mode="json")
+                for t in desk_service.list_tasks(target_kind, target_id)
+            ]
+        }
+
+    @app.get("/desk/tasks/{task_id}")
+    def get_task(task_id: str) -> dict:
+        try:
+            return desk_service.task_view(task_id)
+        except DeskNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/desk/tasks/{task_id}/acts", status_code=201)
+    def strike_task_act(
+        task_id: str, body: StrikeTaskActRequest
+    ) -> dict:
+        try:
+            act = desk_service.strike_task_act(
+                task_id, body.action, body.actor, body.acted_on,
+                body.note,
+            )
+        except DeskNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except DeskValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return act.model_dump(mode="json")
+
+    @app.get("/desk/verify")
+    def verify_desk_endpoint() -> dict:
+        return {"problems": desk_service.verify_all()}
 
     return app
