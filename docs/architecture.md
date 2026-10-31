@@ -350,6 +350,40 @@ LangGraph state machine whose transitions are stored artefacts:
   a market with no current price as a named gap, never
   a zero, and storing its page so re-rendering must
   match byte-for-byte.
+- **desk policy, approvals, config** (R15, landed): who
+  may decide what, and how the desk's own rules change
+  (F20-AD2 + F20-CA2 + F20-CA1). A versioned desk pack
+  states the chains as data — per decision kind, the
+  ordered steps with their roles, the two-person and
+  no-self-approval flags, and the coverage exposure
+  threshold. Rule packs that shape artefacts (backtests,
+  alerts, scenarios) stay code-versioned; the desk pack
+  is the runtime-versioned configuration: a proposal is
+  an insert-only artefact carrying its whole pack and a
+  field-by-field diff against the standing version, and
+  it becomes standing only when its own pack-change
+  chain completes — there is no other activation path,
+  and a status flipped any other way is named by the
+  verifier as a version standing without its chain. A
+  decision pins the pack version and the resolved steps
+  at opening, so a pack change never silently rewrites
+  an open decision; the chain for a forecast is read off
+  the forecast's graded accuracy state, and for coverage
+  off the assessment's own exposure against the pack's
+  threshold. Acts are judged one at a time in order —
+  in order, in role, never the opener, never twice from
+  one actor under any fold of the name — and the
+  decision's state is the fold of its acts. The decision
+  log folds the record's acts into a gapless, as-of
+  sequence. Comments and follow-up tasks pin to
+  artefacts by kind and id, refused over anything not on
+  record; a task's state is the fold of its acts, and a
+  task on a since-superseded scenario says so on its
+  face. Every desk artefact is content-addressed and
+  insert-only, and the verifier re-derives each one —
+  diffs recomputed, acts re-judged, folds rebuilt — so
+  a tampered version, act or log is flagged, never
+  passed silently.
 
 ## Failure posture
 

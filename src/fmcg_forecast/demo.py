@@ -858,6 +858,89 @@ def main() -> int:
           f"carries {[e.event_id for e in soybean_map.active_events]} "
           f"as its active event overlay; the whole geo layer "
           f"re-performs with {len(verify_geo(store))} problems")
+
+    print("\n--- desk policy, approvals, config (R15, F20-AD2 + F20-CA2 + F20-CA1): who may decide what ---")
+    from fmcg_forecast.desk.service import (
+        DeskService,
+        DeskValidationError,
+    )
+    from fmcg_forecast.desk.verify import verify_desk
+
+    governance = DeskService(store)
+    standing = governance.standing()
+    print(f"  the standing desk pack is {standing['label']}: "
+          f"coverage commitments above "
+          f"₹{standing['pack'].exposure_threshold_inr:,.0f} "
+          f"need a desk head's sign-off on top of the review")
+    tightened = governance.standing_pack().model_copy(
+        update={
+            "version": "2026.11.1",
+            "exposure_threshold_inr": 1_000_000.0,
+        }
+    )
+    proposal = governance.propose_policy_version(
+        "2026.11.1", tightened, "a.sharma", date(2026, 1, 2)
+    )
+    print(f"  a.sharma proposes {proposal.label}: "
+          + "; ".join(
+              f"{d.field} {d.before:,.0f} → {d.after:,.0f}"
+              for d in proposal.diff
+          )
+          + f" — it stands as {proposal.status}, not law, "
+          "until its own chain completes")
+    change = governance.open_decision(
+        "pack_change", proposal.version_id, "a.sharma",
+        date(2026, 1, 2), "tighten the exposure bar",
+    )
+    try:
+        governance.strike_act(
+            change.decision_id, "a.sharma", "analyst", "approve",
+            date(2026, 1, 3),
+        )
+        print("  ERROR: the proposer acted on their own change")
+    except DeskValidationError as exc:
+        print(f"  the proposer reaches for the pen and is "
+              f"refused: {exc}")
+    governance.strike_act(
+        change.decision_id, "m.iyer", "analyst", "approve",
+        date(2026, 1, 3),
+    )
+    governance.strike_act(
+        change.decision_id, "d.kaur", "desk_head", "approve",
+        date(2026, 1, 4),
+    )
+    print(f"  review and sign-off land from two other named "
+          f"people; the standing pack is now "
+          f"{governance.standing()['label']} — activation has "
+          "no other door")
+    chili = desk.run_forecast("chili", "guntur")
+    approval = governance.open_decision(
+        "forecast_approval", chili.forecast_id, "r.menon",
+        date(2026, 1, 2), "approve the chili draft",
+    )
+    print(f"  the chili forecast's measured accuracy state is "
+          f"{chili.accuracy.state if chili.accuracy else 'unmeasured'}"
+          f", so its approval chain resolves to "
+          f"{[s.step for s in approval.steps]} — the chain is "
+          "read off the forecast's own face, not chosen")
+    log = governance.strike_decision_log(date(2026, 1, 31))
+    print(f"  the decision log {log.log_id} folds the record's "
+          f"{len(log.entries)} act(s) as of {log.struck_on}, "
+          "sequence gapless from 1")
+    governance.add_comment(
+        "forecast", chili.forecast_id, "m.iyer",
+        "check the arrivals figure with the market contact",
+        date(2026, 1, 3),
+    )
+    follow_up = governance.open_task(
+        "forecast", chili.forecast_id,
+        "confirm the guntur arrivals",
+        "d.kaur", "m.iyer", date(2026, 1, 3),
+    )
+    print(f"  a comment and follow-up task {follow_up.task_id} "
+          f"pin to the chili forecast itself; the whole desk "
+          f"layer re-performs with "
+          f"{len(verify_desk(store))} problems")
     print(f"sealed truth rows stored: {truth_store.count()} (readable only via the truth store)")
     return 0
 

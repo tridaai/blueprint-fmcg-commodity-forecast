@@ -994,6 +994,100 @@ nothing refreshes them automatically. Basis is measured
 on modal price only — arrivals-weighted or
 quality-adjusted basis is not claimed.
 
+## What Round 15 adds
+
+Desk policy pack, approval chains, annotations
+(F20-AD2 + F20-CA2 + F20-CA1 on the roadmap) — the
+layer that governs the desk itself: which decisions
+need whose approval, and how the desk's own rules are
+allowed to change. One scope decision, stated up
+front: the rule packs that shape artefacts (backtest
+accuracy bars, alert thresholds, scenario lever
+bounds) stay **code-versioned packs**, as they have
+been since R3 — every artefact they touch already
+carries their version. What R15 makes runtime-versioned
+is the **desk policy pack**: the approval limits and
+chains, the configuration a desk legitimately tunes
+without a release.
+
+- **The desk policy pack (F20-AD2)** — a versioned
+  pack (`desk/pack.py`, genesis v2026.10.1, fail-closed
+  loader) stating the coverage **exposure threshold**
+  (₹50,00,000) and exactly one **approval chain** per
+  decision kind: pack_change, scenario_adoption,
+  forecast_approval, coverage_commitment. A chain is an
+  ordered list of steps (role + condition); every
+  shipped chain is two-person and bars the requester
+  from acting. A new pack version is a **proposal**
+  (`POL-`): the whole pack plus a field-by-field
+  **diff** against the standing version, both carried
+  on the artefact and re-derived by the verifier. A
+  proposal that changes nothing, reuses a label, or
+  carries an unknown field is refused. A version
+  becomes **standing only through its own pack-change
+  chain** — there is no activate endpoint; when the
+  completing act lands, the service flips the standing
+  pointer in the same strike. A version whose status
+  was flipped any other way is named by the verifier:
+  standing without its chain.
+- **Approval chains (F20-CA2)** — a **decision**
+  (`DEC-`) pins the pack version it opened under and
+  the **resolved steps** for its target, resolved from
+  the target's own face: a forecast whose pinned
+  accuracy state is degraded or unmeasured needs
+  review + desk-head sign-off, a measured one review
+  alone; a coverage commitment above the pack's
+  exposure threshold needs the sign-off step, at or
+  below it does not; scenario adoption always runs its
+  two steps (the two-person rule). **Acts** (`DACT-`)
+  are struck one at a time and judged in order: out of
+  order, in the wrong role, from the decision's opener,
+  twice from one actor (names fold — case, spacing and
+  punctuation are not identity), or dated before the
+  decision opened are all refused, and a rejection
+  closes the decision. The decision's state is the
+  fold of its acts, never a stored field. The
+  **decision log** (`DLOG-`) folds the record's acts
+  up to an as-of into a gapless sequence — the desk's
+  audit read.
+- **Annotations (F20-CA1)** — **comments** (`CMT-`)
+  and **follow-up tasks** (`TSK-`) pin to artefacts by
+  kind and id — forecasts, scenarios, events, alerts,
+  buy signals, dashboards, coverage assessments,
+  basis readings, landed comparisons, market maps —
+  and are refused over anything not on record. A task's
+  state is the fold of its acts (`TACT-` close /
+  reopen); a task pinned to a scenario that has since
+  been superseded carries `target_superseded` on its
+  face — flagged, never quietly moved. Every desk
+  artefact is content-addressed and insert-only, and
+  the verifier re-derives each one: a rewritten diff,
+  a re-stepped act, a dropped log entry or a standing
+  version without its chain is flagged, never passed
+  silently.
+- **Surfaces** — migration 0015 (both dialects);
+  `GET /desk/pack` (the standing pack),
+  `GET /desk/pack/genesis`,
+  `POST/GET /desk/policy-versions` (+ `/{id}`),
+  `POST/GET /desk/decisions` (+ `/{id}`, `/{id}/acts`),
+  `POST/GET /desk/decision-logs` (+ `/{id}`),
+  `POST/GET /desk/comments`, `POST/GET /desk/tasks`
+  (+ `/{id}`, `/{id}/acts`), `GET /desk/verify`; the
+  `fmcg-agent-desk` CLI. The demo proposes a tightened
+  pack, watches its proposer refused, and stands the
+  version through two other named people.
+
+Honest positions, stated plainly: the desk pack is
+configuration, not code — changing a chain changes who
+must approve, never what an engine computes, and every
+change is itself a chained, logged act. Decisions
+opened under an older pack keep that pack's chains to
+their end; nothing re-chains an open decision. Name
+folding is a discipline aid, not identity proof — the
+desk still runs on named people, and a determined
+impersonator is an organisational problem, not one
+this layer claims to solve.
+
 ## Honest status
 
 - **Built and gated in R1:** the spine, generator + manifest, store port +
@@ -1202,10 +1296,36 @@ quality-adjusted basis is not claimed.
   map-cell composition and the weather/event overlay;
   the truth-isolation scan now covers the geo package
   too.
-- **Not yet built:** R15 onward on the round map (the
-  F20-AD2 / F20-CA2 chains and F20-CA1 next). The round
-  map runs to R20 and continues past it until the
-  production bar is met.
+- **Built and gated in R15:** the desk policy pack
+  (exposure threshold and the four approval chains as
+  versioned data, genesis v2026.10.1, fail-closed
+  loader), pack proposals as insert-only artefacts
+  carrying the whole pack and a field-by-field diff
+  the verifier re-derives, activation only through a
+  completed pack-change chain (a version flipped to
+  standing any other way is named), decisions that pin
+  their pack and resolved steps at opening (chains read
+  off the target's own face — a forecast's graded
+  accuracy state, a commitment's exposure against the
+  threshold), acts judged in order, in role, never the
+  opener, never twice from one folded name, the
+  gapless as-of decision log, and comments and
+  follow-up tasks pinned to artefacts that exist (a
+  task on a superseded scenario flagged on its face),
+  migration 0015, the desk API surface, the
+  `fmcg-agent-desk` CLI and the demo walk. Scoped
+  deliberately: the engine packs stay code-versioned,
+  as their artefacts already carry their versions —
+  R15 versions the desk's approval limits and chains,
+  not the engines. Eval gate v14 adds zero-tolerance
+  counters for pack diffs, chain resolution and
+  discipline, activation, log folding, annotations and
+  the desk verifier; the truth-isolation scan now
+  covers the desk package too.
+- **Not yet built:** R16 onward on the round map (the
+  F20-RT1 red-team pass next). The round map runs to
+  R20 and continues past it until the production bar is
+  met.
 - **The dataset in this repo is generated in-repo for the blueprint** — gold
   by construction, so the engine can be graded against a known future.
 - **Live models are stub-tested until configured:** hosted profiles fail
