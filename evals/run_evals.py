@@ -471,6 +471,31 @@ F20-AM2), also zero-tolerance:
   (rewritten cost, honestly addressed) or a board with
   a quietly dropped breach that the verifier passes.
 
+Round 19 counters (the integration surface — F20-IA1 +
+F20-IA2 + F20-DR2), also zero-tolerance:
+
+- integration_webhook_errors: a delivery whose payload
+  is not the artefact read byte for byte, whose
+  signature does not re-derive from the subscription's
+  secret and the bytes, a delivered pair delivered
+  twice, a failed attempt struck without its error
+  named, or the layer failing to re-perform clean.
+- integration_token_errors: a token artefact carrying
+  its secret anywhere, an unknown or repeated scope
+  accepted, a revoked secret still authenticating, or
+  a forged token (scopes widened, honestly addressed)
+  the verifier passes.
+- integration_export_errors: an export job whose pack
+  differs from the synchronous build for the same
+  as-of by so much as a byte or an address, a pack
+  figure that differs from its artefact read, or a
+  tampered pack file the checksum manifest and the
+  verifier pass.
+- integration_tool_errors: a tool figure without its
+  artefact id, a figure differing from the artefact it
+  names, or an unknown tool / missing artefact the
+  tool surface answers instead of refusing by name.
+
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
 
@@ -519,6 +544,7 @@ def truth_isolation_violations() -> int:
         + list((base / "masterdata").rglob("*.py"))
         + list((base / "screening").rglob("*.py"))
         + list((base / "monitoring").rglob("*.py"))
+        + list((base / "integrations").rglob("*.py"))
     )
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -650,6 +676,10 @@ def main() -> int:
         "monitoring_cost_errors": 0,
         "monitoring_freshness_errors": 0,
         "monitoring_board_errors": 0,
+        "integration_webhook_errors": 0,
+        "integration_token_errors": 0,
+        "integration_export_errors": 0,
+        "integration_tool_errors": 0,
     }
 
     # --- planted events, measured seasonally-matched ---------------
@@ -4694,7 +4724,236 @@ def main() -> int:
     ):
         counters["monitoring_board_errors"] += 1
 
-    print("Round 18 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio + R7 prompt-to-dashboard + R8 buy signals & coverage planning + R9 alerting, subscriptions & escalation + R10 thin-data depth & assisted intake + R11 production data plane + R12 forecast-ops analytics & shock grading + R13 operator console: review queue & rejection, event triage gate, coverage pre-flight, phone action parity + R14 geospatial basis & netting: basis bands, desk cost lines, landed comparisons, market map and weather/event overlay + R15 desk policy, approvals, config: pack versions with diffs, approval chains, the gapless decision log, comments and follow-up tasks + R16 identity, scopes, access audit & master data: role-scoped governed reads, existence hiding, the gapless audit fold, versioned market calendars and re-derived coverage + R17 red team: the injection quarantine between corpus and model port, the context audit over a recording port, corpus integrity re-performance, and the stated bounds — stuffing capped at the ladder, leetspeak inert + R18 cost, usage and service monitoring: the run ledger over the recording port, exact cost reconciliation, freshness breaches named by source, as-of discipline and tamper named by the verifier)")
+    # --- Round 19: the integration surface (F20-IA1 + IA2 + DR2) ---
+    # A webhook payload must equal the artefact read and
+    # verify against its signature; a delivered pair is
+    # never delivered twice; token secrets are hashed,
+    # never stored; an export job's pack is the
+    # synchronous pack, byte for byte; a tampered file is
+    # named by the manifest check; tool figures carry
+    # their artefact ids.
+    import csv as _csv19
+    import io as _io19
+    import tempfile as _tempfile19
+    from datetime import date as _date19
+    from pathlib import Path as _Path19
+
+    from fmcg_forecast.forecast.service import (
+        ForecastService as _Forecasts19,
+    )
+    from fmcg_forecast.integrations.engine import (
+        file_bytes as _file_bytes19,
+    )
+    from fmcg_forecast.integrations.models import (
+        canonical_payload as _canon19,
+    )
+    from fmcg_forecast.integrations.models import (
+        sign_payload as _sign19,
+    )
+    from fmcg_forecast.integrations.models import (
+        token_content_id as _token_id19,
+    )
+    from fmcg_forecast.integrations.port import (
+        RecordingWebhookPort as _RecordingPort19,
+    )
+    from fmcg_forecast.integrations.service import (
+        IntegrationError as _IntError19,
+    )
+    from fmcg_forecast.integrations.service import (
+        IntegrationsService as _IntService19,
+    )
+    from fmcg_forecast.integrations.tools import (
+        call_tool as _call_tool19,
+    )
+    from fmcg_forecast.integrations.verify import (
+        verify_integrations as _verify_int19,
+    )
+    from fmcg_forecast.modelport import OfflineModel as _Offline19
+    from fmcg_forecast.store import build_store as _build_store19
+
+    _int19 = _IntService19(store)
+    # An approved forecast to speak about: reuse a standing
+    # one, or run and approve one on the spot.
+    _approved19 = None
+    for _f19 in store.list_forecasts():
+        if store.get_approval(_f19.forecast_id) is not None:
+            _approved19 = _f19
+            break
+    if _approved19 is None:
+        _fc19 = _Forecasts19(store, _Offline19())
+        _approved19 = _fc19.run_forecast("wheat", "indore")
+        _fc19.approve(
+            _approved19.forecast_id, "a.sharma", "desk_head",
+            _date19(2026, 1, 5),
+        )
+    _approval19 = store.get_approval(_approved19.forecast_id)
+
+    # (a) webhooks: payload is the read, signature verifies,
+    # a delivered pair is never struck twice
+    _sub19, _secret19 = _int19.create_subscription(
+        "eval-hook", "https://example.invalid/eval",
+        ["forecast_approved"], "eval",
+    )
+    _port19 = _RecordingPort19()
+    _struck19 = [
+        d for d in _int19.dispatch(_port19)
+        if d.subscription_id == _sub19.subscription_id
+    ]
+    # The eval store holds every earlier section's approvals,
+    # so the count is the store's, not one: what is graded is
+    # that every struck delivery IS its artefact read, signed.
+    if not _struck19 or len(_port19.calls) != len(_struck19):
+        counters["integration_webhook_errors"] += 1
+    for _d19, _call19 in zip(_struck19, _port19.calls):
+        _approval_for19 = None
+        for _f19b in store.list_forecasts():
+            _a19 = store.get_approval(_f19b.forecast_id)
+            if _a19 is not None and _a19.approval_id == _d19.source_artefact_id:
+                _approval_for19 = _a19
+                break
+        if _approval_for19 is None:
+            counters["integration_webhook_errors"] += 1
+            continue
+        if _d19.payload != _canon19(
+            _approval_for19.model_dump(mode="json")
+        ):
+            counters["integration_webhook_errors"] += 1
+        if _call19["headers"]["x-fmcg-signature"] != _sign19(
+            _secret19, _d19.payload
+        ):
+            counters["integration_webhook_errors"] += 1
+        if _call19["body"].decode() != _d19.payload:
+            counters["integration_webhook_errors"] += 1
+        if _d19.outcome != "delivered":
+            counters["integration_webhook_errors"] += 1
+    if [
+        d for d in _int19.dispatch(_port19)
+        if d.subscription_id == _sub19.subscription_id
+    ]:
+        counters["integration_webhook_errors"] += 1
+    _fail19 = _RecordingPort19(status=500)
+    _sub19b, _secret19b = _int19.create_subscription(
+        "eval-hook-fail", "https://example.invalid/down",
+        ["forecast_approved"], "eval",
+    )
+    _failed19 = [
+        d for d in _int19.dispatch(_fail19)
+        if d.subscription_id == _sub19b.subscription_id
+    ]
+    if not _failed19 or any(
+        d.outcome != "failed" or not d.error for d in _failed19
+    ):
+        counters["integration_webhook_errors"] += 1
+
+    # (b) tokens: hash only, closed scopes, revocation folds
+    _scratch19 = _build_store19(
+        str(_Path19(_tempfile19.mkdtemp(dir=None)) / "tokens.db")
+    )
+    _svc19 = _IntService19(_scratch19)
+    _tok19, _tok_secret19 = _svc19.issue_token(
+        "eval-bridge", ["forecasts"], "eval"
+    )
+    if _tok_secret19 in _tok19.model_dump_json():
+        counters["integration_token_errors"] += 1
+    if _svc19.authenticate(_tok_secret19) is None:
+        counters["integration_token_errors"] += 1
+    try:
+        _svc19.issue_token("bad", ["root"], "eval")
+        counters["integration_token_errors"] += 1
+    except _IntError19:
+        pass
+    _svc19.revoke_token(_tok19.token_id, "eval", "graded rotation")
+    if _svc19.authenticate(_tok_secret19) is not None:
+        counters["integration_token_errors"] += 1
+    _scratch19b = _build_store19(
+        str(_Path19(_tempfile19.mkdtemp(dir=None)) / "forged.db")
+    )
+    _forged19 = _tok19.model_copy(
+        update={"scopes": ["forecasts", "root"]}
+    )
+    _forged19 = _forged19.model_copy(
+        update={"token_id": _token_id19(_forged19)}
+    )
+    _scratch19b.insert_integration_token(_forged19)
+    if not any(
+        "closed vocabulary" in p for p in _verify_int19(_scratch19b)
+    ):
+        counters["integration_token_errors"] += 1
+
+    # (c) exports: figures re-perform, the job IS the sync
+    # pack, a tampered file is named
+    _board19 = _int19.build_pack(_date19(2026, 1, 5))
+    _offcsv19 = next(
+        f for f in _board19.files if f.name == "official_forecasts.csv"
+    )
+    _rows19 = list(
+        _csv19.DictReader(_io19.StringIO(_file_bytes19(_offcsv19).decode()))
+    )
+    _mine19 = [
+        r for r in _rows19
+        if r["forecast_id"] == _approved19.forecast_id
+    ]
+    if len(_mine19) != len(_approved19.days):
+        counters["integration_export_errors"] += 1
+    elif any(
+        float(r["p50_inr"]) != _approved19.days[i].p50
+        for i, r in enumerate(
+            sorted(_mine19, key=lambda r: r["forecast_date"])
+        )
+    ):
+        counters["integration_export_errors"] += 1
+    _job19 = _int19.request_job("eval", _date19(2026, 1, 5))
+    _act19 = _int19.run_job(_job19.job_id)
+    if _act19.board_pack_id != _board19.pack_id:
+        counters["integration_export_errors"] += 1
+    _scratch19c = _build_store19(
+        str(_Path19(_tempfile19.mkdtemp(dir=None)) / "tamper.db")
+    )
+    import base64 as _b64_19
+
+    _files19 = []
+    for _f19 in _board19.files:
+        if _f19.name == "buy_signals.csv":
+            _raw19 = bytearray(_file_bytes19(_f19))
+            _raw19[-2] = ord("9") if _raw19[-2] != ord("9") else ord("8")
+            _f19 = _f19.model_copy(
+                update={
+                    "content_b64": _b64_19.b64encode(bytes(_raw19)).decode(),
+                    "size_bytes": len(_raw19),
+                }
+            )
+        _files19.append(_f19)
+    _scratch19c.insert_board_pack(
+        _board19.model_copy(update={"files": _files19})
+    )
+    if not any(
+        "hashes differently" in p for p in _verify_int19(_scratch19c)
+    ):
+        counters["integration_export_errors"] += 1
+
+    # (d) tools: every figure carries its artefact id
+    _tool19 = _call_tool19(
+        store, "get_forecast", {"forecast_id": _approved19.forecast_id}
+    )
+    if not _tool19["figures"] or any(
+        f["artefact_id"] != _approved19.forecast_id
+        for f in _tool19["figures"]
+    ):
+        counters["integration_tool_errors"] += 1
+    try:
+        _call_tool19(store, "drop_tables", {})
+        counters["integration_tool_errors"] += 1
+    except _IntError19:
+        pass
+    try:
+        _call_tool19(store, "get_forecast", {"forecast_id": "FCST-nope"})
+        counters["integration_tool_errors"] += 1
+    except _IntError19:
+        pass
+    if _verify_int19(store):
+        counters["integration_webhook_errors"] += 1
+
+    print("Round 19 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio + R7 prompt-to-dashboard + R8 buy signals & coverage planning + R9 alerting, subscriptions & escalation + R10 thin-data depth & assisted intake + R11 production data plane + R12 forecast-ops analytics & shock grading + R13 operator console: review queue & rejection, event triage gate, coverage pre-flight, phone action parity + R14 geospatial basis & netting: basis bands, desk cost lines, landed comparisons, market map and weather/event overlay + R15 desk policy, approvals, config: pack versions with diffs, approval chains, the gapless decision log, comments and follow-up tasks + R16 identity, scopes, access audit & master data: role-scoped governed reads, existence hiding, the gapless audit fold, versioned market calendars and re-derived coverage + R17 red team: the injection quarantine between corpus and model port, the context audit over a recording port, corpus integrity re-performance, and the stated bounds — stuffing capped at the ladder, leetspeak inert + R18 cost, usage and service monitoring: the run ledger over the recording port, exact cost reconciliation, freshness breaches named by source, as-of discipline and tamper named by the verifier + R19 the integration surface: scoped tokens with hashed secrets and revocation folds, signed webhook deliveries of the artefact reads with every attempt on record, board-pack exports whose figures re-perform and whose manifest names a tampered file, export jobs byte-identical to the synchronous build, and read tools whose figures always carry their artefact id)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]

@@ -1023,6 +1023,118 @@ def main() -> int:
         checks.append(
             ("monitoring layer re-performs clean", r.status_code == 200 and r.json()["problems"] == [])
         )
+        # --- Round 19: the integration surface ---
+        r = client.get(f"{BASE}/integrations/pack")
+        checks.append(
+            ("the integrations pack reads",
+             r.status_code == 200 and r.json()["version"] == "2026.10.1")
+        )
+        r = client.post(
+            f"{BASE}/integrations/tokens",
+            json={"name": "harness-bridge", "scopes": ["forecasts"],
+                  "issued_by": "harness"},
+        )
+        _issued = r.json() if r.status_code == 201 else {}
+        _secret = _issued.get("secret_shown_once", "")
+        checks.append(
+            ("a token issues with its secret shown once",
+             r.status_code == 201 and bool(_secret)
+             and _secret not in str(_issued.get("token")))
+        )
+        _auth = {"Authorization": f"Bearer {_secret}"}
+        r = client.get(f"{BASE}/forecasts/{forecast_id}", headers=_auth)
+        checks.append(
+            ("an in-scope token reads its surface",
+             r.status_code == 200)
+        )
+        r = client.get(f"{BASE}/integrations/pack", headers=_auth)
+        checks.append(
+            ("an out-of-scope surface refuses the token 403",
+             r.status_code == 403)
+        )
+        r = client.get(
+            f"{BASE}/forecasts/{forecast_id}",
+            headers={"Authorization": "Bearer not-a-secret"},
+        )
+        checks.append(
+            ("an unknown secret refuses 401", r.status_code == 401)
+        )
+        r = client.get(f"{BASE}/integrations/tokens")
+        checks.append(
+            ("the token list never carries the secret",
+             r.status_code == 200 and _secret not in r.text)
+        )
+        r = client.post(
+            f"{BASE}/integrations/subscriptions",
+            json={"name": "harness-hook",
+                  "endpoint_url": "https://example.invalid/hook",
+                  "event_kinds": ["forecast_approved"],
+                  "created_by": "harness"},
+        )
+        _sub = r.json() if r.status_code == 201 else {}
+        checks.append(
+            ("a subscription strikes with its secret redacted on reads",
+             r.status_code == 201
+             and _sub.get("subscription", {}).get("secret") is None
+             and bool(_sub.get("secret_shown_once")))
+        )
+        r = client.post(f"{BASE}/integrations/dispatch")
+        _deliveries = r.json().get("deliveries", []) if r.status_code == 200 else []
+        checks.append(
+            ("dispatch attempts the standing sources and records them",
+             r.status_code == 200 and len(_deliveries) >= 1
+             and all(d["subscription_id"] for d in _deliveries))
+        )
+        r = client.post(
+            f"{BASE}/integrations/packs", json={"as_of": "2026-01-05"}
+        )
+        _pack19 = r.json() if r.status_code == 201 else {}
+        checks.append(
+            ("a board pack builds with its six files",
+             r.status_code == 201 and len(_pack19.get("files", [])) == 6)
+        )
+        r = client.get(
+            f"{BASE}/integrations/packs/{_pack19.get('pack_id')}/files/manifest.json"
+        )
+        checks.append(
+            ("the checksum manifest downloads and names the pack",
+             r.status_code == 200
+             and r.json()["pack_id"] == _pack19.get("pack_id")
+             and len(r.json()["files"]) == 5)
+        )
+        r = client.post(
+            f"{BASE}/integrations/jobs",
+            json={"requested_by": "harness", "as_of": "2026-01-05"},
+        )
+        _job = r.json() if r.status_code == 201 else {}
+        r = client.post(f"{BASE}/integrations/jobs/{_job.get('job_id')}/run")
+        checks.append(
+            ("an export job completes onto the synchronous pack",
+             r.status_code == 200
+             and r.json().get("board_pack_id") == _pack19.get("pack_id"))
+        )
+        r = client.get(f"{BASE}/integrations/tools")
+        checks.append(
+            ("the tool catalogue reads",
+             r.status_code == 200 and len(r.json()["tools"]) == 5)
+        )
+        r = client.post(
+            f"{BASE}/integrations/tools/get_forecast/call",
+            json={"args": {"forecast_id": forecast_id}},
+        )
+        checks.append(
+            ("a tool call's figures carry their artefact id",
+             r.status_code == 200
+             and bool(r.json()["figures"])
+             and all(
+                 f["artefact_id"] == forecast_id
+                 for f in r.json()["figures"]
+             ))
+        )
+        r = client.get(f"{BASE}/integrations/verify")
+        checks.append(
+            ("integration layer re-performs clean", r.status_code == 200 and r.json()["problems"] == [])
+        )
         for name, ok in checks:
             print(f"  {'PASS' if ok else 'FAIL'}  {name}")
         return 0 if all(ok for _, ok in checks) else 1

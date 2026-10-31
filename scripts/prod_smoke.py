@@ -51,6 +51,14 @@ before it serves:
   extraction for a flagged item on either profile
   (dialect parity, gap 0), with the layer
   re-performing clean on both profiles.
+- the R19 integration layer works on this profile too:
+  a token issued, a subscription struck, the approval
+  delivered through the recording port, a board pack
+  built and an export job completed on the Postgres
+  store are identical to the same walk on a full
+  SQLite store over the same record (dialect parity,
+  gap 0), with the layer re-performing clean on both
+  profiles.
 
 Usage: DATABASE_URL=postgresql://... python scripts/prod_smoke.py
 Exits 0 when every check passes, 1 otherwise.
@@ -702,6 +710,113 @@ def main() -> int:
                 )
             print("monitoring parity: run records, cost totals and "
                   "freshness board identical across profiles (gap 0)")
+
+            # --- R19: integrations on this profile ----------------
+            from fmcg_forecast.forecast.service import ForecastService
+            from fmcg_forecast.integrations.port import (
+                RecordingWebhookPort,
+            )
+            from fmcg_forecast.integrations.service import (
+                IntegrationsService,
+            )
+            from fmcg_forecast.integrations.verify import (
+                verify_integrations,
+            )
+            from fmcg_forecast.truth import build_truth_store
+            from fmcg_forecast.workflow import load_dataset
+
+            def _integrations_walk(walk_store, truth_path):
+                load_dataset(
+                    walk_store, build_truth_store(truth_path), 20261027
+                )
+                forecasts = ForecastService(walk_store, OfflineModel())
+                forecast = forecasts.run_forecast("wheat", "indore")
+                forecasts.approve(
+                    forecast.forecast_id, "a.sharma", "desk_head",
+                    date(2026, 1, 5),
+                )
+                service = IntegrationsService(walk_store)
+                token, secret = service.issue_token(
+                    "smoke-bridge", ["forecasts"], "a.sharma"
+                )
+                subscription, _sub_secret = service.create_subscription(
+                    "smoke-hook", "https://example.invalid/hook",
+                    ["forecast_approved"], "a.sharma",
+                )
+                struck = service.dispatch(RecordingWebhookPort())
+                board = service.build_pack(date(2026, 1, 5))
+                job = service.request_job("a.sharma", date(2026, 1, 5))
+                act = service.run_job(job.job_id)
+                return {
+                    "token_scopes": token.scopes,
+                    "token_state": service.token_state(
+                        walk_store.get_integration_token(token.token_id)
+                    ),
+                    "auth_ok": service.authenticate(secret) is not None,
+                    "sub_kinds": subscription.event_kinds,
+                    "deliveries": [
+                        (
+                            d.event_kind, d.source_artefact_id,
+                            d.outcome, d.attempt, d.payload,
+                        )
+                        for d in struck
+                    ],
+                    "pack_id": board.pack_id,
+                    "section_rows": board.section_rows,
+                    "file_hashes": {
+                        f.name: f.sha256 for f in board.files
+                    },
+                    "job_state": service.job_state(
+                        walk_store.get_export_job(job.job_id)
+                    ),
+                    "job_pack": act.board_pack_id,
+                    "problems": verify_integrations(walk_store),
+                }
+
+            # The pack folds its store's whole artefact set, so
+            # the parity walk needs a clean room on each profile.
+            _int_schema = f"smoke_int_{uuid.uuid4().hex[:12]}"
+            admin.execute(f'CREATE SCHEMA "{_int_schema}"')
+            _int_pg = build_store(
+                database_url=(
+                    f"{base_url}{sep}options=-c%20search_path%3D"
+                    f"{_int_schema}"
+                )
+            )
+            _int_lite = build_store(str(Path(tmp) / "integrations.db"))
+            pg_int_walk = _integrations_walk(
+                _int_pg, str(Path(tmp) / "int-truth-pg.db")
+            )
+            lite_int_walk = _integrations_walk(
+                _int_lite, str(Path(tmp) / "int-truth-lite.db")
+            )
+            _int_pg.close()
+            _int_lite.close()
+            admin.execute(f'DROP SCHEMA "{_int_schema}" CASCADE')
+            if pg_int_walk["problems"]:
+                problems.append(
+                    "integrations layer does not verify on Postgres: "
+                    f"{pg_int_walk['problems']}"
+                )
+            if lite_int_walk["problems"]:
+                problems.append(
+                    "integrations layer does not verify on SQLite: "
+                    f"{lite_int_walk['problems']}"
+                )
+            if pg_int_walk != lite_int_walk:
+                problems.append(
+                    "integrations parity: deliveries, pack or job "
+                    "differ across profiles"
+                )
+            if len(pg_int_walk["deliveries"]) != 1:
+                problems.append(
+                    "integrations walk delivered "
+                    f"{len(pg_int_walk['deliveries'])} events, "
+                    "expected the one approval"
+                )
+            print("integrations parity: signed deliveries, board "
+                  "pack and export job identical across profiles "
+                  "(gap 0)")
         print("desk parity: version, decision, log, comment and "
               "task artefacts identical across profiles (gap 0)")
     finally:
