@@ -80,6 +80,7 @@ from fmcg_forecast.access.models import (
     PrincipalGrant,
 )
 from fmcg_forecast.masterdata.models import MasterDataVersion
+from fmcg_forecast.screening.models import ScreeningRecord
 from fmcg_forecast.intake.models import IntakeCheckAct, IntakeEntry
 from fmcg_forecast.signals.models import BuySignal
 from fmcg_forecast.thin.models import ThinAssessment
@@ -415,6 +416,14 @@ class Store(Protocol):
         self, version_id: str
     ) -> MasterDataVersion | None: ...
     def list_master_data_versions(self) -> list[MasterDataVersion]: ...
+    # -- screening quarantine records (R17) --
+    def insert_screening_record(self, record: ScreeningRecord) -> None: ...
+    def get_screening_record(
+        self, item_id: str
+    ) -> ScreeningRecord | None: ...
+    def list_screening_records(
+        self, commodity: str | None = None
+    ) -> list[ScreeningRecord]: ...
     def close(self) -> None: ...
 
 
@@ -3029,6 +3038,44 @@ class SqlStore:
             MasterDataVersion.model_validate(json.loads(r[0]))
             for r in cur.fetchall()
         ]
+
+    # -- screening quarantine records (R17) ---------------------------
+
+    def insert_screening_record(self, record: ScreeningRecord) -> None:
+        sql = self._q(
+            "INSERT INTO screening_records (record_id, item_id, payload) "
+            "VALUES (?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (record.record_id, record.item_id, record.model_dump_json()),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_screening_record(self, item_id: str) -> ScreeningRecord | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM screening_records WHERE item_id = ?"
+            ),
+            (item_id,),
+        )
+        row = cur.fetchone()
+        return ScreeningRecord.model_validate(json.loads(row[0])) if row else None
+
+    def list_screening_records(
+        self, commodity: str | None = None
+    ) -> list[ScreeningRecord]:
+        cur = self._conn.execute(
+            self._q("SELECT payload FROM screening_records ORDER BY item_id")
+        )
+        records = [
+            ScreeningRecord.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+        if commodity is not None:
+            records = [r for r in records if r.commodity == commodity]
+        return records
 
     def close(self) -> None:
         self._conn.close()

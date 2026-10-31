@@ -24,6 +24,7 @@ Three checks, all trusting nothing stored:
 
 from __future__ import annotations
 
+import hashlib
 import re
 
 from fmcg_forecast.sentiment.extract import (
@@ -42,6 +43,49 @@ from fmcg_forecast.sentiment.pack import SentimentPack
 
 _ITEM_ID_RE = re.compile(r"NEWS-\d{4}-\d{3}")
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def verify_corpus_integrity(store) -> list[str]:
+    """Re-perform the corpus against its manifest (R17).
+
+    The load path asserts the manifest digest once, at
+    load; until this check nothing re-performed it, so a
+    corpus edited after load — items planted around the
+    load path to swing an index, or items quietly
+    dropped — verified clean on the strength of its
+    surviving extractions. The digest is recomputed over
+    the stored items in the manifest's canonical order
+    (item date, then id — the order the generator
+    assigns ids in) and compared with the manifest on
+    record, count first, then digest. A store with no
+    manifest has nothing to re-perform against: the
+    planted attack fixtures stand in such stores, and
+    this check is silent there by design.
+    """
+    manifest = store.get_sentiment_manifest()
+    if manifest is None:
+        return []
+    items = store.list_sentiment_items()
+    problems: list[str] = []
+    if len(items) != manifest.item_count:
+        problems.append(
+            f"corpus carries {len(items)} items but its manifest "
+            f"({manifest.corpus_version}) names {manifest.item_count} — "
+            "the corpus on record is not the corpus that was loaded"
+        )
+    digest = hashlib.sha256()
+    for item in sorted(items, key=lambda i: (i.item_date, i.item_id)):
+        digest.update(
+            f"{item.item_id}|{item.commodity}|{item.item_date.isoformat()}|"
+            f"{item.source}|{item.headline}\n".encode()
+        )
+    if digest.hexdigest() != manifest.digest:
+        problems.append(
+            "corpus digest mismatch: the stored items do not "
+            f"re-perform to manifest {manifest.corpus_version}'s "
+            "digest — the corpus was altered after load"
+        )
+    return problems
 
 
 def verify_extraction(

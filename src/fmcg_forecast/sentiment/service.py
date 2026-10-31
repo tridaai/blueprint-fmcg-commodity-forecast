@@ -2,13 +2,21 @@
 
 One workflow every surface shares:
 
-- ``run_pipeline`` reads every stored item through the model port
-  into a content-addressed extraction (idempotent: an item whose
-  stored extraction already carries the computed content address
-  is left alone), then computes the weekly index for every
-  commodity that has items. An existing artefact whose content
-  address DISAGREES with a fresh computation under the same pack
-  is a conflict, raised loudly — artefacts are never overwritten.
+- ``run_pipeline`` screens every stored item first (R17,
+  F20-AS2): an item the screening pack flags as
+  instruction-shaped is quarantined — its record is stored
+  and it never reaches the model port, earns no extraction
+  and joins no index. Passing items are read through the
+  model port into a content-addressed extraction
+  (idempotent: an item whose stored extraction already
+  carries the computed content address is left alone),
+  then the weekly index is computed for every commodity
+  that has items. An existing artefact whose content
+  address DISAGREES with a fresh computation under the same
+  pack is a conflict, raised loudly — artefacts are never
+  overwritten. An item that already carries an extraction
+  and is now flagged is the same kind of conflict: the
+  record is never silently rewritten by a pack change.
 - ``forecast_input`` is the forecast engine's provider: it turns
   the stored indices into the daily series the engine aligns
   (index value carried across its week), with the estimation
@@ -28,6 +36,8 @@ from datetime import date, timedelta
 from fmcg_forecast.forecast.engine import SentimentInput
 from fmcg_forecast.forecast.models import Forecast
 from fmcg_forecast.modelport import ModelPort
+from fmcg_forecast.screening.pack import ScreeningPack
+from fmcg_forecast.screening.service import ScreeningService
 from fmcg_forecast.sentiment.extract import build_extraction
 from fmcg_forecast.sentiment.index import compute_index, week_bounds
 from fmcg_forecast.sentiment.models import (
@@ -37,6 +47,7 @@ from fmcg_forecast.sentiment.models import (
 )
 from fmcg_forecast.sentiment.pack import SentimentPack, load_sentiment_pack
 from fmcg_forecast.sentiment.verify import (
+    verify_corpus_integrity,
     verify_extraction,
     verify_index,
     verify_sentiment_claims,
@@ -50,10 +61,17 @@ class SentimentConflictError(RuntimeError):
 
 
 class SentimentService:
-    def __init__(self, store, model: ModelPort, pack: SentimentPack | None = None):
+    def __init__(
+        self,
+        store,
+        model: ModelPort,
+        pack: SentimentPack | None = None,
+        screening_pack: ScreeningPack | None = None,
+    ):
         self.store = store
         self.model = model
         self.pack = pack or load_sentiment_pack()
+        self.screening = ScreeningService(store, screening_pack)
 
     # -- the pipeline ---------------------------------------------------
     def run_pipeline(self) -> dict:
@@ -61,7 +79,29 @@ class SentimentService:
         extracted_new = 0
         already = 0
         unclassified = 0
+        quarantined_new = 0
+        quarantined_on_record = 0
         for item in items:
+            had_record = self.store.get_screening_record(item.item_id) is not None
+            record = self.screening.screen_item(item)
+            if record is not None:
+                # Quarantined (R17): the headline never reaches
+                # the model port. An extraction already standing
+                # for the item means the pack changed under a
+                # standing reading — a conflict, never a rewrite.
+                if self.store.get_extraction(item.item_id) is not None:
+                    raise SentimentConflictError(
+                        f"item {item.item_id} is quarantined by "
+                        f"screening record {record.record_id} but "
+                        "already carries an extraction — the "
+                        "screening pack changed under a standing "
+                        "reading; refusing to rewrite the record"
+                    )
+                if had_record:
+                    quarantined_on_record += 1
+                else:
+                    quarantined_new += 1
+                continue
             reading = self.model.extract_sentiment(headline=item.headline)
             extraction = build_extraction(item, reading, self.pack, self.model.profile_name)
             existing = self.store.get_extraction(item.item_id)
@@ -111,10 +151,13 @@ class SentimentService:
         return {
             "pack_version": self.pack.version,
             "model_profile": self.model.profile_name,
+            "screening_pack_version": self.screening.pack.version,
             "items": len(items),
             "extractions_new": extracted_new,
             "extractions_on_record": already,
             "unclassified": unclassified,
+            "quarantined_new": quarantined_new,
+            "quarantined_on_record": quarantined_on_record,
             "indices_new": indices_new,
             "indices_on_record": indices_on_record,
         }
@@ -142,8 +185,13 @@ class SentimentService:
 
     # -- verification -------------------------------------------------------
     def verify_stored(self) -> dict:
-        """Re-perform every stored extraction and index."""
+        """Re-perform every stored extraction and index, and
+        re-perform the corpus itself against its manifest
+        (R17): a corpus carrying items its manifest does not
+        name — or missing items it does — is a poisoned
+        corpus, whatever its extractions say."""
         problems: list[str] = []
+        problems.extend(verify_corpus_integrity(self.store))
         items = {i.item_id: i for i in self.store.list_sentiment_items()}
         for extraction in self.store.list_extractions():
             item = items.get(extraction.item_id)
