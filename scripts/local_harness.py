@@ -17,7 +17,12 @@ cost line landing with its provenance (and an uncatalogued line
 refused), a basis reading against the reference market, a
 landed comparison naming its missing handling line, and the
 market map inside the planted tariff window carrying the
-event overlay.
+event overlay. Round 15 adds desk policy, approvals, config:
+the standing pack read, a proposal landing proposed with its
+diff, the two-person chain refusing its own proposer, the
+completing sign-off standing the version, the gapless
+decision log, and a comment and follow-up task pinned to the
+forecast.
 """
 
 from __future__ import annotations
@@ -641,6 +646,118 @@ def main() -> int:
         r = client.get(f"{BASE}/geo/verify")
         checks.append(
             ("geo layer re-performs clean", r.status_code == 200 and r.json()["problems"] == [])
+        )
+        # --- Round 15: desk policy, approvals, config over HTTP -----------
+        r = client.get(f"{BASE}/desk/pack")
+        standing_pack = r.json()["pack"] if r.status_code == 200 else {}
+        checks.append(
+            ("the standing desk pack reads",
+             r.status_code == 200 and r.json()["label"] == "2026.10.1")
+        )
+        new_pack = dict(standing_pack)
+        new_pack["version"] = "2026.11.1"
+        new_pack["exposure_threshold_inr"] = 1000000.0
+        r = client.post(
+            f"{BASE}/desk/policy-versions",
+            json={"label": "2026.11.1", "pack": new_pack,
+                  "proposed_by": "a.sharma", "proposed_on": "2026-01-02"},
+        )
+        version_id = r.json()["version_id"] if r.status_code == 201 else None
+        checks.append(
+            (
+                "a pack proposal lands proposed, not standing",
+                r.status_code == 201
+                and r.json()["status"] == "proposed"
+                and [d["field"] for d in r.json()["diff"]]
+                == ["exposure_threshold_inr"]
+                and r.json()["problems"] == [],
+            )
+        )
+        r = client.post(
+            f"{BASE}/desk/decisions",
+            json={"kind": "pack_change", "target_id": version_id,
+                  "opened_by": "a.sharma", "opened_on": "2026-01-02",
+                  "purpose": "tighten the exposure bar"},
+        )
+        decision_id = r.json()["decision_id"] if r.status_code == 201 else None
+        checks.append(
+            (
+                "the pack change resolves its two-person chain",
+                r.status_code == 201
+                and [s["step"] for s in r.json()["steps"]]
+                == ["review", "sign_off"],
+            )
+        )
+        r = client.post(
+            f"{BASE}/desk/decisions/{decision_id}/acts",
+            json={"actor": "a.sharma", "role": "analyst",
+                  "outcome": "approve", "decided_on": "2026-01-03"},
+        )
+        checks.append(("the proposer cannot act on their own change", r.status_code == 422))
+        r = client.post(
+            f"{BASE}/desk/decisions/{decision_id}/acts",
+            json={"actor": "m.iyer", "role": "analyst",
+                  "outcome": "approve", "decided_on": "2026-01-03"},
+        )
+        checks.append(
+            ("the review act lands and the decision stays open",
+             r.status_code == 201 and r.json()["state"] == "in_progress")
+        )
+        r = client.post(
+            f"{BASE}/desk/decisions/{decision_id}/acts",
+            json={"actor": "d.kaur", "role": "desk_head",
+                  "outcome": "approve", "decided_on": "2026-01-04"},
+        )
+        checks.append(
+            ("the sign-off completes the chain",
+             r.status_code == 201 and r.json()["state"] == "approved")
+        )
+        r = client.get(f"{BASE}/desk/pack")
+        checks.append(
+            ("the approved version now stands",
+             r.status_code == 200 and r.json()["label"] == "2026.11.1")
+        )
+        r = client.post(
+            f"{BASE}/desk/decision-logs", json={"struck_on": "2026-01-31"},
+        )
+        checks.append(
+            (
+                "the decision log folds both acts, gapless",
+                r.status_code == 201
+                and [e["seq"] for e in r.json()["entries"]] == [1, 2]
+                and r.json()["problems"] == [],
+            )
+        )
+        r = client.post(
+            f"{BASE}/desk/comments",
+            json={"target_kind": "forecast", "target_id": forecast_id,
+                  "author": "m.iyer",
+                  "text": "check the arrivals figure with the market contact",
+                  "commented_on": "2026-01-03"},
+        )
+        checks.append(
+            ("a comment pins to the forecast",
+             r.status_code == 201 and r.json()["target_id"] == forecast_id)
+        )
+        r = client.post(
+            f"{BASE}/desk/tasks",
+            json={"target_kind": "forecast", "target_id": forecast_id,
+                  "title": "confirm the indore arrivals",
+                  "opened_by": "d.kaur", "assignee": "m.iyer",
+                  "opened_on": "2026-01-03"},
+        )
+        task_id = r.json()["task_id"] if r.status_code == 201 else None
+        r = client.post(
+            f"{BASE}/desk/tasks/{task_id}/acts",
+            json={"action": "close", "actor": "m.iyer", "acted_on": "2026-01-05"},
+        )
+        checks.append(
+            ("the follow-up task closes through its act",
+             r.status_code == 201 and r.json()["state"] == "closed")
+        )
+        r = client.get(f"{BASE}/desk/verify")
+        checks.append(
+            ("desk layer re-performs clean", r.status_code == 200 and r.json()["problems"] == [])
         )
         for name, ok in checks:
             print(f"  {'PASS' if ok else 'FAIL'}  {name}")

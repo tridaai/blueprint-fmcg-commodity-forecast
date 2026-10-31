@@ -28,7 +28,14 @@ before it serves:
   market map are byte-identical to the same artefacts
   struck on a full SQLite store over the same record
   (dialect parity, gap 0), with the layer re-performing
-  clean on the Postgres profile.
+  clean on the Postgres profile;
+- the R15 desk layer works on this profile too: a pack
+  version proposed, chained and stood on the Postgres
+  store, its decision log, and a comment and task pinned
+  to the parity draft, are byte-identical to the same
+  artefacts struck on a full SQLite store over the same
+  record (dialect parity, gap 0), with the layer
+  re-performing clean on both profiles.
 
 Usage: DATABASE_URL=postgresql://... python scripts/prod_smoke.py
 Exits 0 when every check passes, 1 otherwise.
@@ -318,6 +325,111 @@ def main() -> int:
                     )
         print("geo parity: basis, landed and map artefacts "
               "identical across profiles (gap 0)")
+
+        # --- R15: the desk layer on this profile ------------------
+        from fmcg_forecast.desk.service import DeskService
+        from fmcg_forecast.desk.verify import verify_desk
+
+        def _desk_walk(desk, forecast_id):
+            pack = desk.standing_pack().model_copy(
+                update={
+                    "version": "2026.11.1",
+                    "exposure_threshold_inr": 1_000_000.0,
+                }
+            )
+            version = desk.propose_policy_version(
+                "2026.11.1", pack, "a.sharma", date(2026, 1, 2)
+            )
+            decision = desk.open_decision(
+                "pack_change", version.version_id, "a.sharma",
+                date(2026, 1, 2), "tighten the exposure bar",
+            )
+            acts = [
+                desk.strike_act(
+                    decision.decision_id, "m.iyer", "analyst",
+                    "approve", date(2026, 1, 3),
+                ),
+                desk.strike_act(
+                    decision.decision_id, "d.kaur", "desk_head",
+                    "approve", date(2026, 1, 4),
+                ),
+            ]
+            log = desk.strike_decision_log(date(2026, 1, 31))
+            comment = desk.add_comment(
+                "forecast", forecast_id, "m.iyer",
+                "check the arrivals figure with the market contact",
+                date(2026, 1, 3),
+            )
+            task = desk.open_task(
+                "forecast", forecast_id,
+                "confirm the nagpur arrivals",
+                "d.kaur", "m.iyer", date(2026, 1, 3),
+            )
+            desk.strike_task_act(
+                task.task_id, "close", "m.iyer", date(2026, 1, 5)
+            )
+            return (
+                version, decision, acts, log, comment, task,
+                desk.standing()["label"],
+                desk.task_view(task.task_id)["state"],
+            )
+
+        pg_desk = DeskService(store)
+        pg_walk = _desk_walk(pg_desk, pg_draft.forecast_id)
+        if verify_desk(store):
+            problems.append(
+                f"desk layer does not verify on Postgres: "
+                f"{verify_desk(store)}"
+            )
+        with tempfile.TemporaryDirectory() as tmp:
+            lite = build_store(str(Path(tmp) / "desk.db"))
+            lite_truth = build_truth_store(
+                str(Path(tmp) / "desk_truth.db")
+            )
+            load_dataset(lite, lite_truth, data.manifest.seed)
+            run_all(lite)
+            lite_grading = build_sentiment_grading_store(
+                str(Path(tmp) / "desk_grading.db")
+            )
+            load_sentiment_corpus(lite, lite_grading, data.manifest.seed)
+            SentimentService(lite, OfflineModel()).run_pipeline()
+            EventService(lite).seed_historical(lite.get_manifest())
+            lite_draft = ForecastService(
+                lite, OfflineModel()
+            ).run_forecast("soybean", "nagpur", as_of=date(2025, 10, 31))
+            lite_walk = _desk_walk(
+                DeskService(lite), lite_draft.forecast_id
+            )
+            if verify_desk(lite):
+                problems.append(
+                    f"desk layer does not verify on SQLite: "
+                    f"{verify_desk(lite)}"
+                )
+            for name, pg_art, lite_art in zip(
+                (
+                    "policy version", "decision", "acts", "log",
+                    "comment", "task", "standing", "task state",
+                ),
+                pg_walk,
+                lite_walk,
+            ):
+                pg_dump = (
+                    pg_art.model_dump(mode="json")
+                    if hasattr(pg_art, "model_dump")
+                    else pg_art
+                )
+                lite_dump = (
+                    lite_art.model_dump(mode="json")
+                    if hasattr(lite_art, "model_dump")
+                    else lite_art
+                )
+                if pg_dump != lite_dump:
+                    problems.append(
+                        f"desk parity: the {name} differs across "
+                        "profiles"
+                    )
+        print("desk parity: version, decision, log, comment and "
+              "task artefacts identical across profiles (gap 0)")
     finally:
         # The app under test holds its own store connection;
         # its open read transaction would block the DROP, so

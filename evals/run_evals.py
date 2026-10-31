@@ -351,6 +351,38 @@ F20-GS1 + F20-GS2), also zero-tolerance:
   window, or a window covering the as-of that the map
   omits.
 
+Round 15 counters (desk policy pack, approvals, config —
+F20-AD2 + F20-CA2 + F20-CA1), also zero-tolerance:
+
+- desk_pack_version_errors: a proposal whose stored diff
+  disagrees with the diff re-derived here from the raw
+  pack values, a proposal that changes nothing or
+  carries an unknown field and is accepted, a version
+  label that does not match its pack, or a stored
+  version the verifier passes despite any of it.
+- desk_chain_errors: a chain resolved differently from
+  the target's own face (a degraded or unmeasured
+  forecast's steps, a coverage exposure against the
+  pack's threshold), an act the service accepts out of
+  order, in the wrong role, from the decision's opener,
+  or twice from one actor, or an act accepted on a
+  closed decision.
+- desk_activation_errors: a version standing before its
+  pack-change chain completes, a completed chain that
+  does not stand its version, or a version flipped to
+  standing directly that the verifier passes.
+- desk_decision_log_errors: a struck log whose entries
+  are not exactly the record's acts up to its as-of —
+  count, membership or gapless sequence.
+- desk_annotation_errors: a comment listed under an
+  artefact it was not pinned to, a comment or task the
+  service strikes over an artefact not on record, or a
+  task state that disagrees with the fold of its acts.
+- desk_verifier_errors: the whole desk layer failing to
+  re-perform clean after the section's walk, or a
+  version inserted around the service with a fabricated
+  diff that the verifier passes.
+
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
 
@@ -394,6 +426,7 @@ def truth_isolation_violations() -> int:
         + list((base / "analytics").rglob("*.py"))
         + list((base / "console").rglob("*.py"))
         + list((base / "geo").rglob("*.py"))
+        + list((base / "desk").rglob("*.py"))
     )
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -504,6 +537,12 @@ def main() -> int:
         "geo_landed_cost_errors": 0,
         "geo_map_errors": 0,
         "geo_overlay_errors": 0,
+        "desk_pack_version_errors": 0,
+        "desk_chain_errors": 0,
+        "desk_activation_errors": 0,
+        "desk_decision_log_errors": 0,
+        "desk_annotation_errors": 0,
+        "desk_verifier_errors": 0,
     }
 
     # --- planted events, measured seasonally-matched ---------------
@@ -3554,7 +3593,326 @@ def main() -> int:
     if _verify_map14(store, _soy_map14):
         counters["geo_map_errors"] += 1
 
-    print("Round 14 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio + R7 prompt-to-dashboard + R8 buy signals & coverage planning + R9 alerting, subscriptions & escalation + R10 thin-data depth & assisted intake + R11 production data plane + R12 forecast-ops analytics & shock grading + R13 operator console: review queue & rejection, event triage gate, coverage pre-flight, phone action parity + R14 geospatial basis & netting: basis bands, desk cost lines, landed comparisons, market map and weather/event overlay)")
+    # --- Round 15: desk policy pack, approvals, config
+    # (F20-AD2 + F20-CA2 + F20-CA1). Diffs re-derived from
+    # the raw pack values; chain resolution re-performed
+    # from the targets' faces; the discipline probed act
+    # by act; the log re-folded from the store's acts.
+    import sqlite3 as _sqlite15
+    from datetime import date as _date15
+
+    from fmcg_forecast.desk.pack import (
+        load_desk_pack as _load_desk_pack15,
+    )
+    from fmcg_forecast.desk.service import (
+        DeskService as _DeskService15,
+    )
+    from fmcg_forecast.desk.service import (
+        DeskValidationError as _DeskRefusal15,
+    )
+    from fmcg_forecast.desk.verify import (
+        verify_desk as _verify_desk15,
+    )
+    from fmcg_forecast.desk.verify import (
+        verify_policy_version as _verify_pv15,
+    )
+    from fmcg_forecast.planning.models import (
+        CoverageAssessment as _Cov15,
+    )
+    from fmcg_forecast.planning.models import (
+        assessment_content_id as _cov_id15,
+    )
+
+    _desk15 = _DeskService15(store)
+    _genesis15 = _load_desk_pack15()
+
+    def _refused15(fn) -> bool:
+        try:
+            fn()
+        except _DeskRefusal15:
+            return True
+        return False
+
+    # pack versions: the diff re-derived from raw values
+    _pack15 = _genesis15.model_copy(
+        update={
+            "version": "2026.11.1",
+            "exposure_threshold_inr": 1_000_000.0,
+        }
+    )
+    _v15 = _desk15.propose_policy_version(
+        "2026.11.1", _pack15, "a.sharma", _date15(2026, 1, 2)
+    )
+    if [d.model_dump(mode="json") for d in _v15.diff] != [
+        {
+            "field": "exposure_threshold_inr",
+            "before": 5_000_000.0,
+            "after": 1_000_000.0,
+        }
+    ]:
+        counters["desk_pack_version_errors"] += 1
+    if _v15.supersedes_label != "2026.10.1":
+        counters["desk_pack_version_errors"] += 1
+    if not _refused15(
+        lambda: _desk15.propose_policy_version(
+            "2026.12.1",
+            _genesis15.model_copy(update={"version": "2026.12.1"}),
+            "a.sharma",
+            _date15(2026, 1, 2),
+        )
+    ):
+        counters["desk_pack_version_errors"] += 1
+    _bogus15 = _genesis15.model_dump(mode="json")
+    _bogus15["version"] = "2026.12.1"
+    _bogus15["bogus"] = 1
+    if not _refused15(
+        lambda: _desk15.propose_policy_version(
+            "2026.12.1", _bogus15, "a.sharma", _date15(2026, 1, 2)
+        )
+    ):
+        counters["desk_pack_version_errors"] += 1
+    if _verify_pv15(store, _v15):
+        counters["desk_pack_version_errors"] += 1
+
+    # chains: resolution re-performed from the target's face
+    _chili15 = service.run_forecast("chili", "guntur")
+    _state15 = (
+        _chili15.accuracy.state
+        if _chili15.accuracy is not None
+        else "unmeasured"
+    )
+    _dec15 = _desk15.open_decision(
+        "forecast_approval", _chili15.forecast_id, "r.menon",
+        _date15(2026, 1, 2), "approve the chili draft",
+    )
+    _want15 = 2 if _state15 in ("degraded", "unmeasured") else 1
+    if len(_dec15.steps) != _want15:
+        counters["desk_chain_errors"] += 1
+    if _dec15.resolution[0].value != _state15:
+        counters["desk_chain_errors"] += 1
+    if not _refused15(
+        lambda: _desk15.strike_act(
+            _dec15.decision_id, "d.kaur", "desk_head",
+            "approve", _date15(2026, 1, 3),
+        )
+    ):
+        counters["desk_chain_errors"] += 1
+    if not _refused15(
+        lambda: _desk15.strike_act(
+            _dec15.decision_id, "r.menon", "analyst",
+            "approve", _date15(2026, 1, 3),
+        )
+    ):
+        counters["desk_chain_errors"] += 1
+    _desk15.strike_act(
+        _dec15.decision_id, "m.iyer", "analyst", "approve",
+        _date15(2026, 1, 3),
+    )
+    if len(_dec15.steps) == 2:
+        if not _refused15(
+            lambda: _desk15.strike_act(
+                _dec15.decision_id, "m.iyer", "desk_head",
+                "approve", _date15(2026, 1, 4),
+            )
+        ):
+            counters["desk_chain_errors"] += 1
+        _desk15.strike_act(
+            _dec15.decision_id, "d.kaur", "desk_head",
+            "approve", _date15(2026, 1, 4),
+        )
+    if _desk15.decision_view(_dec15.decision_id)["state"] != "approved":
+        counters["desk_chain_errors"] += 1
+    if not _refused15(
+        lambda: _desk15.strike_act(
+            _dec15.decision_id, "x.y", "analyst", "approve",
+            _date15(2026, 1, 5),
+        )
+    ):
+        counters["desk_chain_errors"] += 1
+
+    def _cov15(exposure: float, marker: str) -> _Cov15:
+        assessment = _Cov15(
+            assessment_id="",
+            plan_id=f"PLAN-{marker}",
+            commodity="wheat",
+            market="indore",
+            basis_kind="official_forecast",
+            forecast_id=f"FCST-{marker}",
+            scenario_id=None,
+            scenario_status_at_assessment=None,
+            as_of=_date15(2025, 12, 31),
+            spot_inr=2400.0,
+            spot_date=_date15(2025, 12, 31),
+            signal_id=f"SIG-{marker}",
+            signal_value="phased",
+            pack_version="2026.10.1",
+            signal_pack_version="2026.10.1",
+            coverage_days=30.0,
+            stockout_month=None,
+            months=[],
+            total_required_tonnes=100.0,
+            total_uncovered_tonnes=50.0,
+            total_exposure_inr=exposure,
+            unvalued_months=[],
+            options=[],
+            figures=[],
+            notes=[],
+            scope_note="eval fixture for chain resolution",
+        )
+        assessment = assessment.model_copy(
+            update={"assessment_id": _cov_id15(assessment)}
+        )
+        store.insert_coverage_assessment(assessment)
+        return assessment
+
+    _big15 = _cov15(16_000_000.0, "evalbig")
+    _big_dec15 = _desk15.open_decision(
+        "coverage_commitment", _big15.assessment_id, "r.menon",
+        _date15(2026, 1, 2), "commit the quarter",
+    )
+    if [s.step for s in _big_dec15.steps] != [
+        "commit_review", "desk_head_sign_off",
+    ]:
+        counters["desk_chain_errors"] += 1
+    _facts15 = {f.name: f.value for f in _big_dec15.resolution}
+    if _facts15.get("exposure_inr") != "16000000.00":
+        counters["desk_chain_errors"] += 1
+    _small15 = _cov15(400_000.0, "evalsmall")
+    _small_dec15 = _desk15.open_decision(
+        "coverage_commitment", _small15.assessment_id, "r.menon",
+        _date15(2026, 1, 2), "commit a top-up",
+    )
+    if [s.step for s in _small_dec15.steps] != ["commit_review"]:
+        counters["desk_chain_errors"] += 1
+
+    # activation: standing moves only through the chain
+    if _desk15.standing()["label"] != "2026.10.1":
+        counters["desk_activation_errors"] += 1
+    _pc15 = _desk15.open_decision(
+        "pack_change", _v15.version_id, "a.sharma",
+        _date15(2026, 1, 2), "tighten the exposure bar",
+    )
+    _desk15.strike_act(
+        _pc15.decision_id, "m.iyer", "analyst", "approve",
+        _date15(2026, 1, 3),
+    )
+    if _desk15.standing()["label"] != "2026.10.1":
+        counters["desk_activation_errors"] += 1
+    _desk15.strike_act(
+        _pc15.decision_id, "d.kaur", "desk_head", "approve",
+        _date15(2026, 1, 4),
+    )
+    if _desk15.standing()["label"] != "2026.11.1":
+        counters["desk_activation_errors"] += 1
+    if _desk15.get_policy_version(_v15.version_id).status != "standing":
+        counters["desk_activation_errors"] += 1
+    # a version flipped to standing without its chain is named
+    _v2_15 = _desk15.propose_policy_version(
+        "2026.12.1",
+        _desk15.standing_pack().model_copy(
+            update={
+                "version": "2026.12.1",
+                "exposure_threshold_inr": 500_000.0,
+            }
+        ),
+        "m.iyer",
+        _date15(2026, 2, 1),
+    )
+    _raw15 = _sqlite15.connect(str(tmp / "evals.db"))
+    _raw15.execute(
+        "UPDATE policy_versions SET status = 'standing' "
+        "WHERE version_id = ?",
+        (_v2_15.version_id,),
+    )
+    _raw15.commit()
+    if not _verify_pv15(
+        store, _desk15.get_policy_version(_v2_15.version_id)
+    ):
+        counters["desk_activation_errors"] += 1
+    _raw15.execute(
+        "UPDATE policy_versions SET status = 'proposed' "
+        "WHERE version_id = ?",
+        (_v2_15.version_id,),
+    )
+    _raw15.commit()
+    _raw15.close()
+
+    # the log: membership, count and sequence re-folded
+    _log15 = _desk15.strike_decision_log(_date15(2026, 1, 31))
+    _acts15 = [
+        a
+        for a in store.list_decision_acts()
+        if a.decided_on <= _date15(2026, 1, 31)
+    ]
+    if len(_log15.entries) != len(_acts15):
+        counters["desk_decision_log_errors"] += 1
+    if {e.act_id for e in _log15.entries} != {
+        a.act_id for a in _acts15
+    }:
+        counters["desk_decision_log_errors"] += 1
+    if [e.seq for e in _log15.entries] != list(
+        range(1, len(_log15.entries) + 1)
+    ):
+        counters["desk_decision_log_errors"] += 1
+
+    # annotations: pinned, folded, refused over ghosts
+    _comment15 = _desk15.add_comment(
+        "forecast", _chili15.forecast_id, "m.iyer",
+        "check the arrivals figure with the market contact",
+        _date15(2026, 1, 3),
+    )
+    _wheat15 = service.run_forecast("wheat", "indore")
+    if _desk15.list_comments("forecast", _wheat15.forecast_id):
+        counters["desk_annotation_errors"] += 1
+    if _desk15.list_comments(
+        "forecast", _chili15.forecast_id
+    ) != [_comment15]:
+        counters["desk_annotation_errors"] += 1
+    if not _refused15(
+        lambda: _desk15.add_comment(
+            "forecast", "FCST-ghost", "m.iyer", "on nothing",
+            _date15(2026, 1, 3),
+        )
+    ):
+        counters["desk_annotation_errors"] += 1
+    _task15 = _desk15.open_task(
+        "forecast", _chili15.forecast_id,
+        "confirm the guntur arrivals",
+        "d.kaur", "m.iyer", _date15(2026, 1, 3),
+    )
+    _desk15.strike_task_act(
+        _task15.task_id, "close", "m.iyer", _date15(2026, 1, 5)
+    )
+    if _desk15.task_view(_task15.task_id)["state"] != "closed":
+        counters["desk_annotation_errors"] += 1
+    if _desk15.task_view(_task15.task_id)["target_superseded"] is not False:
+        counters["desk_annotation_errors"] += 1
+
+    # the verifier: the whole layer re-performs, and a
+    # version forged around the service is named
+    if _verify_desk15(store):
+        counters["desk_verifier_errors"] += 1
+    _forged15 = _v2_15.model_copy(
+        update={
+            "diff": [
+                d.model_copy(update={"after": 42.0})
+                for d in _v2_15.diff
+            ]
+        }
+    )
+    _forged15 = _forged15.model_copy(
+        update={
+            "version_id": "POL-forged00000000",
+            "label": "2027.9.9",
+        }
+    )
+    store.insert_policy_version(_forged15)
+    if not _verify_pv15(
+        store, store.get_policy_version("POL-forged00000000")
+    ):
+        counters["desk_verifier_errors"] += 1
+
+    print("Round 15 evals — FMCG commodity forecast (R1 data integrity + R2 forecast engine + R3 backtesting/ledger + R4 sentiment + R5 event registry + R6 scenario studio + R7 prompt-to-dashboard + R8 buy signals & coverage planning + R9 alerting, subscriptions & escalation + R10 thin-data depth & assisted intake + R11 production data plane + R12 forecast-ops analytics & shock grading + R13 operator console: review queue & rejection, event triage gate, coverage pre-flight, phone action parity + R14 geospatial basis & netting: basis bands, desk cost lines, landed comparisons, market map and weather/event overlay + R15 desk policy, approvals, config: pack versions with diffs, approval chains, the gapless decision log, comments and follow-up tasks)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]

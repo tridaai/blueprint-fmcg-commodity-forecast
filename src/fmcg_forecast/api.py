@@ -425,7 +425,7 @@ class AddCommentRequest(BaseModel):
     target_kind: str
     target_id: str
     author: str
-    body: str
+    text: str
     commented_on: date
 
 
@@ -2300,7 +2300,12 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except DeskValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return act.model_dump(mode="json")
+        decision = desk_service.get_decision(decision_id)
+        return {
+            **decision.model_dump(mode="json"),
+            **desk_service.decision_view(decision_id),
+            "act": act.model_dump(mode="json"),
+        }
 
     @app.post("/desk/decision-logs", status_code=201)
     def strike_decision_log(body: StrikeDecisionLogRequest) -> dict:
@@ -2331,7 +2336,7 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
         try:
             comment = desk_service.add_comment(
                 body.target_kind, body.target_id, body.author,
-                body.body, body.commented_on,
+                body.text, body.commented_on,
             )
         except DeskValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -2393,7 +2398,12 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except DeskValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return act.model_dump(mode="json")
+        task = desk_service.get_task(task_id)
+        return {
+            **task.model_dump(mode="json"),
+            **desk_service.task_view(task_id),
+            "act": act.model_dump(mode="json"),
+        }
 
     @app.get("/desk/verify")
     def verify_desk_endpoint() -> dict:
