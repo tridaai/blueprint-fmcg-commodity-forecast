@@ -18,7 +18,7 @@ human has not approved.
 
 > **Work in progress** — this blueprint is built and passing its automated test and eval gates, but it has not yet finished hands-on local testing, and its companion blog post is not yet published. Expect changes. This notice comes off when both are done.
 
-## The laws (enforced in code, as the rounds land)
+## The laws (enforced in code)
 
 1. **Forecasts are computed, never narrated.** A stated statistical engine produces
    every figure: trend/seasonal baseline + per-driver contributions, each a
@@ -59,10 +59,12 @@ references, with all code here original to this repo:
 Python 3.12 · FastAPI · Pydantic · LangGraph state machines (ingest → compute →
 explain → scenario → human gate → publish) · PostgreSQL 16 as the system of
 record (monthly range partitioning, Timescale-ready) with SQLite for the
-offline dev/test profile · DuckDB for backtesting and analytical scans ·
-numpy/pandas + statsmodels primitives under the stated in-repo forecast
-engine · model port with an offline deterministic default and fail-closed
-hosted profiles (Anthropic, Amazon Bedrock, NVIDIA NIM) · uv with exact pins
+offline dev/test profile · numpy numerics under the stated in-repo forecast
+engine (backtests and analytical scans run through the store port and the
+in-repo engines; pandas, statsmodels and DuckDB are pinned in the manifest
+but unused — see Honest status) · model port with an offline deterministic
+default and fail-closed hosted profiles (Anthropic, Amazon Bedrock,
+NVIDIA NIM) · uv with exact pins
 and a frozen `constraints.txt` · multi-stage non-root Docker.
 
 ## What Round 1 builds
@@ -112,10 +114,10 @@ and a frozen `constraints.txt` · multi-stage non-root Docker.
   gets wide bands and named gaps, never borrowed precision (Law 7).
 - **Sealed-window discipline** — the engine estimates on history only. An
   `as_of` inside the sealed grading window is refused unless the caller
-  explicitly invokes the backtest path (the harness lands in R3); the
+  explicitly invokes the backtest path (the harness landed in R3); the
   engine structurally cannot read the sealed rows.
 - **The events slot** — forecasts carry a declared-event adjustment line,
-  zero in R2; the event registry fills it in R5 so a shock shows as its
+  zero in R2; the event registry filled it in R5 so a shock shows as its
   own contribution instead of being absorbed silently (Law 4).
 - **Draft → official is a human act** — a forecast is born a draft; making
   it the desk's official view takes a recorded approval by a named
@@ -1497,6 +1499,21 @@ detected by the verifier, not prevented.
 
 ## Honest status
 
+- **Release state (R20):** version 1.0.0. All twenty rounds of the
+  round map are built and gated; the release freeze ran the complete
+  gate set twice on the finished tree — the full test suite with the
+  Postgres parity leg live on a fresh database (gap 0), the eval
+  gate, the demo, the HTTP harness and the production smoke — with
+  identical figures both times (see `docs/release-1.0.0.md`). The
+  work-in-progress notice at the top stays: hands-on developer
+  testing and the companion blog post are still outstanding.
+- **Pinned but unused dependencies:** pandas, statsmodels and
+  DuckDB are pinned in `pyproject.toml` and the frozen
+  `constraints.txt`, but no module in this repo imports them as of
+  1.0.0 — the engines' numerics are numpy, and backtests and
+  analytical scans run through the store port and the in-repo
+  engines. They stay pinned so the frozen dependency set stays
+  stable; no doc in this repo claims them as working parts.
 - **Built and gated in R1:** the spine, generator + manifest, store port +
   migration 0001 (both dialects), truth store, model port, ingest workflow,
   API reads, demo, harness, eval gate v1 (data integrity: planted shock/ban
@@ -1822,10 +1839,21 @@ detected by the verifier, not prevented.
   zero-tolerance counters for webhooks, tokens,
   exports and tools; the truth-isolation scan now
   covers the integrations package too.
-- **Not yet built:** R20 onward on the round map (the
-  release-hardening pass next). The round map runs to
-  R20 and continues past it until the production bar
-  is met.
+- **Built and gated in R20:** the release-hardening pass —
+  version 1.0.0 in every carrier (package metadata,
+  `__version__`, the API's stated version, the lockfile root
+  entry), this changelog's full R1–R20 history
+  (`CHANGELOG.md`), a docs sweep correcting the docs to what
+  actually ships (the stack line's DuckDB / pandas / statsmodels
+  claim, the layout's package list and migration range, the
+  architecture component table), a migration review against the
+  repo's own runner (both dialect sets: identical names,
+  gapless 0001–0019, clean application in order on fresh
+  databases, idempotent re-run applying 0 — verdict CLEAN),
+  `docs/release-1.0.0.md`, and the double freeze. No new
+  features. **The twenty-round map is complete at 1.0.0**; the
+  design roadmap's post-R20 tail remains available if further
+  rounds are ordered.
 - **The dataset in this repo is generated in-repo for the blueprint** — gold
   by construction, so the engine can be graded against a known future.
 - **Live models are stub-tested until configured:** hosted profiles fail
@@ -1978,7 +2006,77 @@ src/fmcg_forecast/
                    honesty invariants, named
     service.py     build / read / verify — one workflow
     cli.py         the fmcg-agent-analytics command line
-migrations/        0001-0012 SQL, sqlite + postgres dialects
+  console/         the operator console package (R13):
+    pack.py        the console pack: freshness windows, queue
+                   order, rejection vocabulary, triage acts
+    models.py      review / triage / pre-flight artefacts
+    engine.py      queues, folds and the pre-flight, in code
+    render.py      the desktop and phone pages
+    verify.py      queue, gate and parity re-performance
+    service.py     review / triage / pre-flight — one workflow
+    cli.py         the fmcg-agent-console command line
+  geo/             the geospatial basis package (R14):
+    pack.py        the geo pack: band rule, cost-line
+                   catalogue, ranking rule, schematic grid
+    models.py      basis reading / cost line / landed
+                   comparison / market map artefacts
+    engine.py      pairing, bands, landed arithmetic, in code
+    render.py      the market map page
+    verify.py      band + cell re-performance
+    service.py     read / enter / compare / map — one workflow
+    cli.py         the fmcg-agent-geo command line
+  desk/            the desk policy package (R15):
+    pack.py        the desk pack: exposure threshold, the
+                   four approval chains as data
+    models.py      proposal / decision / act / log /
+                   comment / task artefacts
+    engine.py      chain resolution + the act fold, in code
+    verify.py      diff, chain and fold re-derivation
+    service.py     propose / decide / annotate — one workflow
+    cli.py         the fmcg-agent-desk command line
+  access/          the access package (R16):
+    pack.py        the access pack: roles + surfaces as data
+    models.py      grant / access entry / audit log artefacts
+    engine.py      grant chains + read judgement, in code
+    verify.py      chain, outcome and fold re-derivation
+    service.py     grant / judge / audit — one workflow
+    cli.py         the fmcg-agent-access command line
+  masterdata/      the master data package (R16):
+    pack.py        the master data pack: genesis state, diff rule
+    models.py      master data version artefacts
+    engine.py      calendar arithmetic + coverage re-derivation
+    verify.py      diff re-derivation from the two states
+    service.py     strike / read / re-derive — one workflow
+    cli.py         the fmcg-agent-masterdata command line
+  screening/       the injection quarantine package (R17):
+    pack.py        the screening pack: five closed categories,
+                   the folding discipline
+    models.py      screening record artefacts
+    engine.py      fold + match, the one engine both sides use
+    verify.py      record + corpus-integrity re-performance
+    service.py     screen / record / verify — one workflow
+    cli.py         the fmcg-agent-screening command line
+  monitoring/      the monitoring package (R18):
+    pack.py        the monitoring pack: purposes, estimator,
+                   reference rate card, freshness windows
+    models.py      run record / monitoring board artefacts
+    port.py        the recording model port (the choke point)
+    engine.py      board folds: usage, cost, freshness
+    verify.py      record + board re-performance
+    service.py     wrap / board / verify — one workflow
+    cli.py         the fmcg-agent-monitoring command line
+  integrations/    the integration package (R19):
+    pack.py        the integrations pack: surfaces, route map,
+                   webhook kinds, export sections
+    models.py      token / subscription / delivery / board
+                   pack / export job artefacts
+    port.py        the caller-supplied delivery port
+    engine.py      dispatch, export build, job folds, in code
+    tools.py       the five MCP-shaped read tools
+    verify.py      whole-layer re-performance
+    service.py     issue / subscribe / export — one workflow
+    cli.py         the fmcg-agent-integrations command line
+migrations/        0001-0019 SQL, sqlite + postgres dialects
 scripts/           demo.py, local_harness.py, prod_smoke.py
 evals/             the eval gate
 docs/              architecture.md

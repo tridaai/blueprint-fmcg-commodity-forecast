@@ -22,12 +22,16 @@ dependencies = [
     # -> explain -> scenario -> human gate -> publish).
     "langgraph==0.6.11",
     # Deterministic numerics under the stated in-repo engines. The
-    # forecast decomposition is ours; these are utilities, never a
-    # black-box forecaster.
+    # forecast decomposition is ours; numpy performs its regressions
+    # and is a utility, never a black-box forecaster.
     "numpy==2.5.4",
+    # Pinned but unused as of 1.0.0: no module in this repo imports
+    # pandas, statsmodels or duckdb — the backtests and analytical
+    # scans run through the store port and the in-repo engines.
+    # They stay pinned so the frozen dependency set stays stable;
+    # the README's honest status says the same.
     "pandas==3.1.0",
     "statsmodels==0.15.0",
-    # Analytical scans / backtesting over the same artefacts (R3+).
     "duckdb==2.0.0",
 ]
 
