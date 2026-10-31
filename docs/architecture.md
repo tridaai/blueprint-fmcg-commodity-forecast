@@ -429,6 +429,26 @@ LangGraph state machine whose transitions are stored artefacts:
   every changed date per window, so a calendar edit's
   blast radius is read, not guessed. Calendars move
   expectations only; stored observations never move.
+- **injection quarantine** (R17, landed): the screen
+  between the corpus and the model port (F20-AS2). A
+  versioned screening pack states five closed
+  categories of instruction-shaped text and the
+  folding discipline they are judged under (case
+  folded, zero-width characters removed, separator
+  runs collapsed); the pipeline judges every item
+  with the one engine the verifier re-performs with.
+  A flagged item becomes a content-addressed
+  quarantine record carrying its headline verbatim and
+  stops there — no port call, no extraction, no
+  index, no citation — while a passing item travels
+  byte-identical, because the screen routes and never
+  edits. The corpus itself is under the same
+  discipline: its manifest digest, asserted at load,
+  is re-performed by the sentiment verifier, so items
+  planted around the load path are named by count and
+  digest instead of silently joining the record.
+  Obfuscation past the stated normalisation is a
+  stated limit, not a claim.
 
 ## Failure posture
 

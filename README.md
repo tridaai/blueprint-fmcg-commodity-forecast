@@ -1186,6 +1186,86 @@ identity proof. And a calendar is reference data: it
 moves what coverage *expects*, never what history
 *recorded*.
 
+## What Round 17 adds
+
+Red team: injection & poisoning (F20-AS2 on the
+roadmap) — the round that attacks the surfaces the
+first sixteen built, fixes what breaks at the root,
+and pins every verdict in standing gates. The headline
+defect was real: the sentiment pipeline handed every
+stored headline to the model port unscreened, and a
+headline is text written by someone the desk does not
+control.
+
+- **The screening pack and the quarantine (F20-AS2)**
+  — a versioned pack (`screening/pack.py`, genesis
+  v2026.10.1, fail-closed loader) stating five closed
+  categories of instruction-shaped text (instruction
+  override, role reassignment, directed verdict, fake
+  authority, output directive) and the folding
+  discipline they are judged under: lower case,
+  zero-width characters removed, separator runs
+  collapsed — so case games, punctuation-splitting and
+  zero-width splitting are the same text under the
+  pack's own reading. The pipeline screens every item
+  before any model call; a flagged item is quarantined
+  as a content-addressed record (`SRN-`, migration
+  0017) carrying the headline **verbatim** — the
+  screen routes, it never edits — and it earns no
+  extraction, joins no index and is cited by no
+  commentary. A headline that merely *reports* about
+  instructions, systems or classifications matches no
+  construction and passes byte-identical; the planted
+  corpus passes whole (583 of 583, graded).
+- **The context audit** — the eval gate and tests run
+  the pipeline against a recording model port and
+  grade the negative space directly: no planted
+  instruction's headline is ever offered to the port,
+  and every passing headline is offered exactly as
+  stored. Nine planted attacks (override, role, fake
+  authority, verdict, output directive, and the three
+  obfuscations, plus an instruction riding a second
+  sentence) are quarantined with their rules named.
+- **The poisoning suite's real find** — the corpus
+  manifest's digest was asserted once, at load, and no
+  verifier ever re-performed it: a flood of items
+  planted around the load path verified clean on the
+  strength of its surviving extractions. Corpus
+  integrity is now re-performed (count, then digest,
+  in `verify_stored` and graded in evals): a planted
+  flood is named by count and digest.
+- **Verdicts that held, pinned not asserted** — an
+  event description carrying an instruction never
+  enters any model context (the scenario context is
+  event id + class, audited over every port call); a
+  scenario-text breakout is refused by the grammar
+  naming the clause; an injected dashboard clause
+  becomes a named gap panel and states no figure;
+  lexicon stuffing can counterfeit the strongest
+  reading the sentiment ladder allows and no more —
+  its direction and strength cap exactly where a
+  genuinely strong headline's do.
+- **Stated limits** — obfuscation past the pack's
+  stated normalisation (leetspeak, homoglyphs) is not
+  caught: it travels to the port as inert text, the
+  offline lexicon finds no instruction in it, and a
+  hosted profile's residual exposure is a deployment
+  decision, recorded in the pack. Insert-only remains
+  a service discipline, not a storage guarantee —
+  records forged around the service are *detected* by
+  the verifier (re-performance, completeness both
+  ways, quarantine-holds), not prevented. Screening
+  covers item headlines; desk-entered request text is
+  the desk's own instruction by design and is bounded
+  by the scenario/dashboard grammars instead.
+- **Surfaces** — `GET /screening/pack`,
+  `GET /screening/records` (+ `/{item_id}`),
+  `GET /screening/verify`; the sentiment item read now
+  carries its screening record; the
+  `fmcg-agent-screening` CLI; the demo plants an
+  instruction in the corpus and watches it quarantined
+  while the ministry item beside it passes.
+
 ## Honest status
 
 - **Built and gated in R1:** the spine, generator + manifest, store port +
@@ -1447,8 +1527,31 @@ moves what coverage *expects*, never what history
   diffs, calendar re-derivation and both verifiers;
   the truth-isolation scan now covers the access and
   masterdata packages too.
-- **Not yet built:** R17 onward on the round map (the
-  F20-AS2 injection-quarantine and red-team pass
+- **Built and gated in R17:** the red-team pass — the
+  screening pack (five closed categories of
+  instruction-shaped text as versioned data, genesis
+  v2026.10.1, fail-closed loader) and the folding
+  engine shared by the pipeline and the verifier,
+  quarantine records content-addressed and insert-only
+  (migration 0017), the sentiment pipeline screening
+  every item before the model port (a flagged item
+  with a standing extraction is a loud conflict, never
+  a rewrite), corpus integrity re-performance (count
+  and digest against the manifest) inside the
+  sentiment verifier, the screening API surfaces and
+  the `fmcg-agent-screening` CLI, and the graded
+  attack suite: nine injection variants quarantined,
+  three reporting-about headlines passed byte-identical,
+  the 583-item corpus passed whole, stuffing capped at
+  the ladder, the leetspeak limit stated and pinned,
+  event/scenario/dashboard text surfaces audited.
+  Eval gate v16 adds zero-tolerance counters for
+  context leaks, false positives, screening records,
+  corpus integrity and the stated bounds; the
+  truth-isolation scan now covers the screening
+  package too.
+- **Not yet built:** R18 onward on the round map (the
+  F20-AM2 cost, usage and service-monitoring pass
   next). The round map runs to R20 and continues past
   it until the production bar is met.
 - **The dataset in this repo is generated in-repo for the blueprint** — gold
