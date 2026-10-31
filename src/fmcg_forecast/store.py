@@ -65,6 +65,15 @@ from fmcg_forecast.geo.models import (
     LandedComparison,
     MarketMap,
 )
+from fmcg_forecast.desk.models import (
+    ArtefactComment,
+    DecisionAct,
+    DecisionCase,
+    DecisionLog,
+    FollowUpTask,
+    PolicyVersion,
+    TaskAct,
+)
 from fmcg_forecast.intake.models import IntakeCheckAct, IntakeEntry
 from fmcg_forecast.signals.models import BuySignal
 from fmcg_forecast.thin.models import ThinAssessment
@@ -339,6 +348,47 @@ class Store(Protocol):
     def list_market_maps(
         self, commodity: str | None = None
     ) -> list[MarketMap]: ...
+    # -- desk policy versions, decisions, log, annotations (R15) --
+    def insert_policy_version(self, version: PolicyVersion) -> None: ...
+    def get_policy_version(
+        self, version_id: str
+    ) -> PolicyVersion | None: ...
+    def list_policy_versions(self) -> list[PolicyVersion]: ...
+    def set_policy_version_status(
+        self, version_id: str, status: str
+    ) -> None: ...
+    def insert_decision(self, decision: DecisionCase) -> None: ...
+    def get_decision(
+        self, decision_id: str
+    ) -> DecisionCase | None: ...
+    def list_decisions(
+        self, kind: str | None = None, target_id: str | None = None
+    ) -> list[DecisionCase]: ...
+    def insert_decision_act(self, act: DecisionAct) -> None: ...
+    def get_decision_act(self, act_id: str) -> DecisionAct | None: ...
+    def list_decision_acts(
+        self, decision_id: str | None = None
+    ) -> list[DecisionAct]: ...
+    def insert_decision_log(self, log: DecisionLog) -> None: ...
+    def get_decision_log(self, log_id: str) -> DecisionLog | None: ...
+    def list_decision_logs(self) -> list[DecisionLog]: ...
+    def insert_comment(self, comment: ArtefactComment) -> None: ...
+    def get_comment(
+        self, comment_id: str
+    ) -> ArtefactComment | None: ...
+    def list_comments(
+        self, target_kind: str | None = None,
+        target_id: str | None = None,
+    ) -> list[ArtefactComment]: ...
+    def insert_task(self, task: FollowUpTask) -> None: ...
+    def get_task(self, task_id: str) -> FollowUpTask | None: ...
+    def list_tasks(
+        self, target_kind: str | None = None,
+        target_id: str | None = None,
+    ) -> list[FollowUpTask]: ...
+    def insert_task_act(self, act: TaskAct) -> None: ...
+    def get_task_act(self, act_id: str) -> TaskAct | None: ...
+    def list_task_acts(self, task_id: str) -> list[TaskAct]: ...
     def close(self) -> None: ...
 
 
@@ -2460,6 +2510,344 @@ class SqlStore:
         cur = self._conn.execute(self._q(sql), params)
         return [
             MarketMap.model_validate(json.loads(r[0])) for r in cur.fetchall()
+        ]
+
+    # Desk policy versions, decisions and their acts, the
+    # decision log, comments and tasks are insert-only,
+    # like every other artefact: the desk service checks
+    # the content address before inserting, so a re-strike
+    # is a no-op rather than a duplicate-write error. The
+    # one moving part is a policy version's lifecycle
+    # status — a separate column flipped only by the
+    # service when a pack-change chain completes, synced
+    # onto the artefact at read, the forecast precedent.
+
+    def _policy_version_from_row(self, row) -> PolicyVersion:
+        payload = json.loads(row[3])
+        payload["status"] = row[2]
+        return PolicyVersion.model_validate(payload)
+
+    def insert_policy_version(self, version: PolicyVersion) -> None:
+        sql = self._q(
+            "INSERT INTO policy_versions (version_id, label, "
+            "status, payload) VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                version.version_id,
+                version.label,
+                version.status,
+                version.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_policy_version(
+        self, version_id: str
+    ) -> PolicyVersion | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT version_id, label, status, payload "
+                "FROM policy_versions WHERE version_id = ?"
+            ),
+            (version_id,),
+        )
+        row = cur.fetchone()
+        return self._policy_version_from_row(row) if row else None
+
+    def list_policy_versions(self) -> list[PolicyVersion]:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT version_id, label, status, payload "
+                "FROM policy_versions ORDER BY label, version_id"
+            )
+        )
+        return [self._policy_version_from_row(r) for r in cur.fetchall()]
+
+    def set_policy_version_status(
+        self, version_id: str, status: str
+    ) -> None:
+        self._conn.execute(
+            self._q(
+                "UPDATE policy_versions SET status = ? "
+                "WHERE version_id = ?"
+            ),
+            (status, version_id),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def insert_decision(self, decision: DecisionCase) -> None:
+        sql = self._q(
+            "INSERT INTO decisions (decision_id, kind, "
+            "target_id, payload) VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                decision.decision_id,
+                decision.kind,
+                decision.target_id,
+                decision.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_decision(self, decision_id: str) -> DecisionCase | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM decisions WHERE decision_id = ?"
+            ),
+            (decision_id,),
+        )
+        row = cur.fetchone()
+        return DecisionCase.model_validate(json.loads(row[0])) if row else None
+
+    def list_decisions(
+        self, kind: str | None = None, target_id: str | None = None
+    ) -> list[DecisionCase]:
+        sql = "SELECT payload FROM decisions"
+        params: list = []
+        clauses = []
+        if kind is not None:
+            clauses.append("kind = ?")
+            params.append(kind)
+        if target_id is not None:
+            clauses.append("target_id = ?")
+            params.append(target_id)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY kind, target_id, decision_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            DecisionCase.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    def insert_decision_act(self, act: DecisionAct) -> None:
+        sql = self._q(
+            "INSERT INTO decision_acts (act_id, decision_id, "
+            "decided_on, payload) VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                act.act_id,
+                act.decision_id,
+                self._date_param(act.decided_on),
+                act.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_decision_act(self, act_id: str) -> DecisionAct | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM decision_acts WHERE act_id = ?"
+            ),
+            (act_id,),
+        )
+        row = cur.fetchone()
+        return DecisionAct.model_validate(json.loads(row[0])) if row else None
+
+    def list_decision_acts(
+        self, decision_id: str | None = None
+    ) -> list[DecisionAct]:
+        sql = "SELECT payload FROM decision_acts"
+        params: list = []
+        if decision_id is not None:
+            sql += " WHERE decision_id = ?"
+            params.append(decision_id)
+        sql += " ORDER BY decided_on, act_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            DecisionAct.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    def insert_decision_log(self, log: DecisionLog) -> None:
+        sql = self._q(
+            "INSERT INTO decision_logs (log_id, struck_on, "
+            "payload) VALUES (?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                log.log_id,
+                self._date_param(log.struck_on),
+                log.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_decision_log(self, log_id: str) -> DecisionLog | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM decision_logs WHERE log_id = ?"
+            ),
+            (log_id,),
+        )
+        row = cur.fetchone()
+        return DecisionLog.model_validate(json.loads(row[0])) if row else None
+
+    def list_decision_logs(self) -> list[DecisionLog]:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM decision_logs "
+                "ORDER BY struck_on, log_id"
+            )
+        )
+        return [
+            DecisionLog.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    def insert_comment(self, comment: ArtefactComment) -> None:
+        sql = self._q(
+            "INSERT INTO artefact_comments (comment_id, "
+            "target_kind, target_id, payload) VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                comment.comment_id,
+                comment.target_kind,
+                comment.target_id,
+                comment.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_comment(self, comment_id: str) -> ArtefactComment | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM artefact_comments "
+                "WHERE comment_id = ?"
+            ),
+            (comment_id,),
+        )
+        row = cur.fetchone()
+        return (
+            ArtefactComment.model_validate(json.loads(row[0]))
+            if row
+            else None
+        )
+
+    def list_comments(
+        self, target_kind: str | None = None,
+        target_id: str | None = None,
+    ) -> list[ArtefactComment]:
+        sql = "SELECT payload FROM artefact_comments"
+        params: list = []
+        clauses = []
+        if target_kind is not None:
+            clauses.append("target_kind = ?")
+            params.append(target_kind)
+        if target_id is not None:
+            clauses.append("target_id = ?")
+            params.append(target_id)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY target_kind, target_id, comment_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            ArtefactComment.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    def insert_task(self, task: FollowUpTask) -> None:
+        sql = self._q(
+            "INSERT INTO follow_up_tasks (task_id, target_kind, "
+            "target_id, payload) VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                task.task_id,
+                task.target_kind,
+                task.target_id,
+                task.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_task(self, task_id: str) -> FollowUpTask | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM follow_up_tasks WHERE task_id = ?"
+            ),
+            (task_id,),
+        )
+        row = cur.fetchone()
+        return FollowUpTask.model_validate(json.loads(row[0])) if row else None
+
+    def list_tasks(
+        self, target_kind: str | None = None,
+        target_id: str | None = None,
+    ) -> list[FollowUpTask]:
+        sql = "SELECT payload FROM follow_up_tasks"
+        params: list = []
+        clauses = []
+        if target_kind is not None:
+            clauses.append("target_kind = ?")
+            params.append(target_kind)
+        if target_id is not None:
+            clauses.append("target_id = ?")
+            params.append(target_id)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY target_kind, target_id, task_id"
+        cur = self._conn.execute(self._q(sql), params)
+        return [
+            FollowUpTask.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    def insert_task_act(self, act: TaskAct) -> None:
+        sql = self._q(
+            "INSERT INTO task_acts (act_id, task_id, acted_on, "
+            "payload) VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                act.act_id,
+                act.task_id,
+                self._date_param(act.acted_on),
+                act.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_task_act(self, act_id: str) -> TaskAct | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM task_acts WHERE act_id = ?"
+            ),
+            (act_id,),
+        )
+        row = cur.fetchone()
+        return TaskAct.model_validate(json.loads(row[0])) if row else None
+
+    def list_task_acts(self, task_id: str) -> list[TaskAct]:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM task_acts WHERE task_id = ? "
+                "ORDER BY acted_on, act_id"
+            ),
+            (task_id,),
+        )
+        return [
+            TaskAct.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
         ]
 
     def close(self) -> None:
