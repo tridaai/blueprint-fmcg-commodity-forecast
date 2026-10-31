@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "trida-blueprint-fmcg-commodity-forecast"
-version = "0.1.0"
+version = "1.0.0"
 description = "Trida AI Blueprint — Commodity Price Forecasting & Procurement Intelligence Agent for an FMCG/food buyer's trading desk (reference prototype)"
 readme = "README.md"
 license = "Apache-2.0"

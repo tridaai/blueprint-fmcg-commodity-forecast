@@ -618,7 +618,7 @@ def create_app(store: SqlStore, model: ModelPort | None = None) -> FastAPI:
     integrations_pack = load_integrations_pack()
     app = FastAPI(
         title="FMCG Commodity Forecast — Operations API",
-        version="0.19.0",
+        version="1.0.0",
         description="Read surfaces for the commodity price & driver store, "
         "the governed forecast surface, the backtest/accuracy surface, "
         "the sentiment surface, the event registry, the scenario "
