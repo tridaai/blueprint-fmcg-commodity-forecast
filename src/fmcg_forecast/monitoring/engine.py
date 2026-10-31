@@ -129,7 +129,11 @@ def build_freshness_row(
     window = window_for(pack, source.cadence)
     max_age = window.max_age_hours if window else None
     mine = sorted(
-        (b for b in batches if b.received_at <= as_of),
+        (
+            b
+            for b in batches
+            if b.source_id == source.source_id and b.received_at <= as_of
+        ),
         key=lambda b: (b.received_at, b.batch_id),
     )
     loaded = [b for b in mine if b.status == "loaded"]
