@@ -468,6 +468,35 @@ LangGraph state machine whose transitions are stored artefacts:
   never-loaded sources named on the board's face.
   The verifier re-performs records and boards field
   for field; drift is named, never silently passed.
+- **the integration surface** (R19, landed): how
+  other systems connect (F20-IA1 + F20-IA2 +
+  F20-DR2). An integrations pack states the closed
+  surface vocabulary, the route-to-surface map, the
+  closed webhook event kinds and the export
+  sections. Tokens carry scopes judged per request
+  that presents one — the secret is shown once and
+  stored only as its hash, revocation is a named act
+  folded into state — while a request presenting no
+  token keeps the local posture the pack states.
+  Webhook deliveries are artefacts struck per
+  attempt around a caller-supplied port: the payload
+  is the source artefact's canonical read, signed
+  HMAC-SHA256 under the subscription's secret, with
+  the delivery's address struck before the attempt
+  so the header a receiver sees is the record's id;
+  delivered pairs are never re-struck, failures
+  retry at the next ordinal with the error named.
+  Board-pack exports fold four sections from the
+  artefacts at a stated as-of through one builder —
+  the synchronous build and an export job's output
+  are the same content-addressed pack — with a
+  checksum manifest the verifier checks against the
+  addressed files, and five read tools in MCP shape
+  whose figures always carry their artefact id. The
+  verifier re-performs the whole layer: addresses,
+  vocabularies, signatures, payloads against the
+  standing reads, ordinals, pack rebuilds and job
+  folds.
 
 ## Failure posture
 

@@ -1355,6 +1355,146 @@ Insert-only remains a service discipline, not a
 storage guarantee: records forged around the service
 are detected by the verifier, not prevented.
 
+## What Round 19 adds
+
+The integration surface (F20-IA1 + F20-IA2 +
+F20-DR2 on the roadmap) — how other systems connect
+to the desk: tokens that carry their scopes, webhook
+deliveries that can be verified by the receiver, and
+board-pack exports a downstream tool can check
+without trusting the sender.
+
+- **The integrations pack** — a versioned pack
+  (`integrations/pack.py`, genesis v2026.10.1,
+  fail-closed loader) stating the closed surface
+  vocabulary a token may be scoped to (forecasts,
+  dashboards, board, signals, planning, events,
+  scenarios, alerts, console, data, operations,
+  admin), the route-to-surface map (longest prefix;
+  the health and readiness probes are open — they
+  carry no desk data), the closed webhook event kinds
+  (alert_raised, forecast_approved, event_triaged),
+  the signature algorithm and headers, and the export
+  sections with their exact columns.
+- **Scoped tokens (F20-IA1)** — issuing a token
+  (`TOK-`, migration 0019) shows its secret exactly
+  once; the artefact stores only the secret's
+  SHA-256. A request presenting a bearer secret is
+  bound by its token's scopes: an out-of-scope
+  surface is refused 403, an unknown or revoked
+  secret 401. Revocation is a named act (`TOKA-`);
+  the token's state is the fold of its acts, and the
+  secret authenticates nothing once revoked. A
+  request presenting **no** token keeps the local
+  posture — the pack states this plainly rather than
+  pretending the surface is authenticated end to
+  end; deployment authentication (SSO, signed
+  tokens) composes with the scope judgement, it does
+  not replace it.
+- **Signed webhooks (F20-IA1)** — a subscription
+  (`WHS-`) names an http(s) endpoint, a closed set of
+  event kinds and its own signing secret (shown
+  once, redacted on every read — unlike token
+  secrets it stands server-side on the artefact,
+  because deliveries are signed and re-performed
+  server-side). Dispatch folds the standing sources —
+  raised alerts, forecast approvals, triage acts —
+  and strikes one delivery artefact (`WHD-`) per
+  attempt through a caller-supplied port: the
+  payload is the source artefact's read in canonical
+  form, byte for byte, and the signature is
+  HMAC-SHA256 over those bytes under the
+  subscription's secret, so a receiver verifies from
+  the secret and the bytes alone. A delivered pair is
+  never delivered twice; a failed attempt is recorded
+  with its outcome and error named and retried at the
+  next ordinal on the next dispatch. A delivery's
+  address is struck **before** the attempt — the id
+  in the delivery header is the id on the record.
+- **Board-pack exports (F20-DR2)** — the export is
+  one builder, not two: four CSV sections folded from
+  the artefacts standing at a stated as-of (official
+  forecasts — approved, one row per forecast day;
+  the accuracy ledger; active events with retired
+  ones excluded; buy signals), a deterministic
+  summary PDF struck by an in-repo renderer (no
+  timestamps, no compression, so bytes are stable),
+  and a checksum manifest naming every other file's
+  SHA-256 and size. The pack (`BPK-`) is
+  content-addressed over its files; the manifest
+  names the address but is not itself an input to
+  it, and the verifier checks the manifest against
+  the addressed files, re-derives every file's hash,
+  and rebuilds the pack whole — a tampered file is
+  named by file, and an artefact set that has moved
+  on fails the rebuild naming the drift (strike a
+  fresh pack) rather than passing silently.
+- **Export jobs (F20-IA2)** — a job (`JOB-`) is its
+  request: the same person asking for the same as-of
+  is the same job, returned not duplicated. Running
+  it strikes a completion act (`JOBA-`) naming the
+  pack produced — which is the synchronous build's
+  pack, because both paths call the one builder; a
+  job runs once, and a second run is refused. A
+  build failure strikes a fail act naming the error.
+- **The read tools (F20-IA2)** — five tools in MCP
+  shape (name, description, surface, input schema):
+  get_forecast, get_accuracy, get_signal, get_event,
+  get_dashboard_assembly. Every figure in a response
+  carries the id of the artefact it was read from —
+  a figure without provenance is refused at the
+  surface, and an unknown tool, a missing argument
+  or a missing artefact is refused by name. The
+  tools are the surface in-process today; a hosted
+  MCP server is a deployment wrapper over the same
+  catalogue and dispatcher.
+- **The verifier re-performs the layer** — token
+  addresses, scope vocabulary and hash shape; acts
+  against known tokens; subscription addresses and
+  kind vocabulary; every delivery's address, payload
+  hash, signature and payload-against-standing-read,
+  delivered-implies-2xx, failed-implies-error-named,
+  gapless per-pair ordinals and at most one delivered
+  attempt per pair; every pack's full rebuild;
+  every job's acts and its named pack. Forged scopes,
+  doctored signatures and tampered files are graded
+  in the tests and the eval gate.
+- **Surfaces** — `GET /integrations/pack`,
+  `POST /integrations/tokens` (the secret, once),
+  `GET /integrations/tokens`,
+  `POST /integrations/tokens/{id}/revoke`,
+  `POST /integrations/subscriptions` (redacted read +
+  the secret, once), `GET /integrations/subscriptions`,
+  `POST /integrations/dispatch`,
+  `GET /integrations/deliveries`,
+  `POST /integrations/packs`, `GET /integrations/packs`
+  (+ `/{pack_id}`, `/{pack_id}/files/{name}`),
+  `POST /integrations/jobs`, `GET /integrations/jobs`
+  (+ `/{job_id}`, `POST /integrations/jobs/{job_id}/run`),
+  `GET /integrations/tools`,
+  `POST /integrations/tools/{name}/call`,
+  `GET /integrations/verify`; the
+  `fmcg-agent-integrations` CLI; the demo issues a
+  token, strikes a subscription, dispatches the
+  standing events, builds the pack and runs a job.
+
+Honest positions, stated plainly: presenting a
+token is what binds a request — the no-token local
+posture is the pack's stated rule for a
+single-process desk deployment, not an oversight,
+and the header that names an actor elsewhere in
+this repo remains an identity claim, not
+authentication. Webhook delivery is at-least-once
+by attempt record, not exactly-once: a receiver
+that answered 2xx while the attempt write failed
+would be re-sent on the next dispatch, and the
+attempt artefacts are the reconciliation. The PDF
+renderer is a stated, minimal text renderer —
+sections and headline figures, not a typeset board
+book. Insert-only remains a service discipline:
+secrets and rows forged around the service are
+detected by the verifier, not prevented.
+
 ## Honest status
 
 - **Built and gated in R1:** the spine, generator + manifest, store port +
@@ -1659,10 +1799,33 @@ are detected by the verifier, not prevented.
   reconciliation, freshness and boards; the
   truth-isolation scan now covers the monitoring
   package too.
-- **Not yet built:** R19 onward on the round map (the
-  F20-IA1 + F20-IA2 + F20-DR2 integration and board-pack
-  export pass next). The round map runs to R20 and
-  continues past it until the production bar is met.
+- **Built and gated in R19:** the integration layer —
+  the integrations pack (closed surfaces and the
+  route map, closed webhook event kinds, the export
+  sections with exact columns; genesis v2026.10.1,
+  fail-closed loader), scoped tokens with secrets
+  hashed and shown once (out-of-scope 403,
+  unknown/revoked 401 over HTTP, revocation folded
+  from named acts), signed webhook deliveries whose
+  payloads are the artefact reads byte for byte with
+  every attempt on record, board-pack exports folded
+  from artefacts by the one builder with a checksum
+  manifest, export jobs whose completion acts name
+  the synchronous pack, the five read tools whose
+  figures carry their artefact ids, migration 0019,
+  the integration API surfaces and the
+  `fmcg-agent-integrations` CLI, and the graded
+  walks: signature re-derivation, delivered-pair
+  dedup, failure retry at the next ordinal, pack
+  figure re-performance, manifest tamper named, and
+  the verifier's forgery probes. Eval gate v18 adds
+  zero-tolerance counters for webhooks, tokens,
+  exports and tools; the truth-isolation scan now
+  covers the integrations package too.
+- **Not yet built:** R20 onward on the round map (the
+  release-hardening pass next). The round map runs to
+  R20 and continues past it until the production bar
+  is met.
 - **The dataset in this repo is generated in-repo for the blueprint** — gold
   by construction, so the engine can be graded against a known future.
 - **Live models are stub-tested until configured:** hosted profiles fail

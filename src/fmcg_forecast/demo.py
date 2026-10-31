@@ -1097,6 +1097,61 @@ def main() -> int:
           f"never loaded — {', '.join(board.never_loaded)} — while "
           f"the one-off bootstrap owes no window; the layer "
           f"re-performs with {len(verify_monitoring(store))} problems")
+
+    print("\n--- the integration surface (R19, F20-IA1 + F20-IA2 + F20-DR2): scoped tokens, signed webhooks, board-pack exports ---")
+    from fmcg_forecast.integrations.models import sign_payload
+    from fmcg_forecast.integrations.port import RecordingWebhookPort
+    from fmcg_forecast.integrations.service import IntegrationsService
+    from fmcg_forecast.integrations.tools import call_tool
+    from fmcg_forecast.integrations.verify import verify_integrations
+
+    integrations = IntegrationsService(store)
+    token, token_secret = integrations.issue_token(
+        "erp-bridge", ["forecasts", "signals"], "a.sharma"
+    )
+    print(f"  token {token.token_id} issued to erp-bridge, scoped "
+          f"to {', '.join(token.scopes)}; its secret printed once "
+          f"({len(token_secret)} chars) and only its SHA-256 stands "
+          f"on the artefact — presenting it binds the request to "
+          f"those scopes, an unknown or revoked secret is refused")
+    subscription, hook_secret = integrations.create_subscription(
+        "crm", "https://example.invalid/crm-hook",
+        ["forecast_approved", "alert_raised", "event_triaged"],
+        "a.sharma",
+    )
+    hook_port = RecordingWebhookPort()
+    struck = integrations.dispatch(hook_port)
+    delivered = [d for d in struck if d.outcome == "delivered"]
+    signature_ok = bool(struck) and (
+        hook_port.calls[0]["headers"]["x-fmcg-signature"]
+        == sign_payload(hook_secret, struck[0].payload)
+    )
+    print(f"  subscription {subscription.subscription_id} takes "
+          f"{len(struck)} standing events over the recording port: "
+          f"{len(delivered)} delivered, each payload the artefact "
+          f"read byte for byte and signed with the subscription's "
+          f"secret — the first signature re-derives from the "
+          f"secret the subscriber was shown once: {signature_ok}")
+    board_pack = integrations.build_pack(date(2026, 1, 5))
+    print(f"  board pack {board_pack.pack_id} struck for "
+          f"2026-01-05: sections "
+          f"{', '.join(f'{k}={v}' for k, v in board_pack.section_rows.items())} "
+          f"across {len(board_pack.files)} files, each named in "
+          f"the checksum manifest by SHA-256 and size")
+    job = integrations.request_job("a.sharma", date(2026, 1, 5))
+    act = integrations.run_job(job.job_id)
+    print(f"  export job {job.job_id} completed onto pack "
+          f"{act.board_pack_id} — the same address as the "
+          f"synchronous build, so the job's output is the sync "
+          f"output byte for byte; a second run is refused")
+    figures = call_tool(
+        store, "get_forecast", {"forecast_id": shocked.forecast_id}
+    )
+    print(f"  the read tools answer in MCP shape: get_forecast "
+          f"returns {len(figures['figures'])} figures, every one "
+          f"carrying its artefact id "
+          f"({figures['figures'][0]['artefact_id']}); the layer "
+          f"re-performs with {len(verify_integrations(store))} problems")
     print(f"sealed truth rows stored: {truth_store.count()} (readable only via the truth store)")
     return 0
 
