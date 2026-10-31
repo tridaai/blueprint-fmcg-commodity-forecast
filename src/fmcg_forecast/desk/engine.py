@@ -48,9 +48,14 @@ class DeskError(Exception):
 
 
 def _folded_name(name: str) -> str:
-    """Names compare folded, the maker–checker rule from
-    assisted intake: case and spacing are not identity."""
-    return " ".join(name.split()).casefold()
+    """Names compare folded: case, spacing and
+    punctuation are not identity — "A. Sharma",
+    "a.sharma" and "A  SHARMA" are one person to the
+    chain rules. (Assisted intake's maker–checker folds
+    case alone; the chain rules fold harder, because a
+    two-person rule that a full stop defeats is not a
+    rule.)"""
+    return "".join(ch for ch in name.casefold() if ch.isalnum())
 
 
 # -- target resolution -------------------------------------------------
