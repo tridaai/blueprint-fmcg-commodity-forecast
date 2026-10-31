@@ -74,6 +74,12 @@ from fmcg_forecast.desk.models import (
     PolicyVersion,
     TaskAct,
 )
+from fmcg_forecast.access.models import (
+    AccessEntry,
+    AccessLog,
+    PrincipalGrant,
+)
+from fmcg_forecast.masterdata.models import MasterDataVersion
 from fmcg_forecast.intake.models import IntakeCheckAct, IntakeEntry
 from fmcg_forecast.signals.models import BuySignal
 from fmcg_forecast.thin.models import ThinAssessment
@@ -389,6 +395,26 @@ class Store(Protocol):
     def insert_task_act(self, act: TaskAct) -> None: ...
     def get_task_act(self, act_id: str) -> TaskAct | None: ...
     def list_task_acts(self, task_id: str) -> list[TaskAct]: ...
+    # -- access grants, read entries, audit logs (R16) --
+    def insert_principal_grant(self, grant: PrincipalGrant) -> None: ...
+    def get_principal_grant(
+        self, grant_id: str
+    ) -> PrincipalGrant | None: ...
+    def list_principal_grants(self) -> list[PrincipalGrant]: ...
+    def insert_access_entry(self, entry: AccessEntry) -> None: ...
+    def get_access_entry(self, entry_id: str) -> AccessEntry | None: ...
+    def list_access_entries(self) -> list[AccessEntry]: ...
+    def insert_access_log(self, log: AccessLog) -> None: ...
+    def get_access_log(self, log_id: str) -> AccessLog | None: ...
+    def list_access_logs(self) -> list[AccessLog]: ...
+    # -- master data versions (R16) --
+    def insert_master_data_version(
+        self, version: MasterDataVersion
+    ) -> None: ...
+    def get_master_data_version(
+        self, version_id: str
+    ) -> MasterDataVersion | None: ...
+    def list_master_data_versions(self) -> list[MasterDataVersion]: ...
     def close(self) -> None: ...
 
 
@@ -2847,6 +2873,160 @@ class SqlStore:
         )
         return [
             TaskAct.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    # -- access grants, read entries, audit logs (R16) --
+
+    def insert_principal_grant(self, grant: PrincipalGrant) -> None:
+        sql = self._q(
+            "INSERT INTO principal_grants (grant_id, subject, "
+            "seq, payload) VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                grant.grant_id,
+                grant.subject,
+                grant.seq,
+                grant.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_principal_grant(self, grant_id: str) -> PrincipalGrant | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM principal_grants "
+                "WHERE grant_id = ?"
+            ),
+            (grant_id,),
+        )
+        row = cur.fetchone()
+        return PrincipalGrant.model_validate(json.loads(row[0])) if row else None
+
+    def list_principal_grants(self) -> list[PrincipalGrant]:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM principal_grants ORDER BY seq"
+            )
+        )
+        return [
+            PrincipalGrant.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    def insert_access_entry(self, entry: AccessEntry) -> None:
+        sql = self._q(
+            "INSERT INTO access_entries (entry_id, seq, payload) "
+            "VALUES (?, ?, ?)"
+        )
+        self._conn.execute(
+            sql, (entry.entry_id, entry.seq, entry.model_dump_json())
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_access_entry(self, entry_id: str) -> AccessEntry | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM access_entries WHERE entry_id = ?"
+            ),
+            (entry_id,),
+        )
+        row = cur.fetchone()
+        return AccessEntry.model_validate(json.loads(row[0])) if row else None
+
+    def list_access_entries(self) -> list[AccessEntry]:
+        cur = self._conn.execute(
+            self._q("SELECT payload FROM access_entries ORDER BY seq")
+        )
+        return [
+            AccessEntry.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    def insert_access_log(self, log: AccessLog) -> None:
+        sql = self._q(
+            "INSERT INTO access_logs (log_id, struck_on, payload) "
+            "VALUES (?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (log.log_id, log.struck_on.isoformat(), log.model_dump_json()),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_access_log(self, log_id: str) -> AccessLog | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM access_logs WHERE log_id = ?"
+            ),
+            (log_id,),
+        )
+        row = cur.fetchone()
+        return AccessLog.model_validate(json.loads(row[0])) if row else None
+
+    def list_access_logs(self) -> list[AccessLog]:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM access_logs "
+                "ORDER BY struck_on, log_id"
+            )
+        )
+        return [
+            AccessLog.model_validate(json.loads(r[0]))
+            for r in cur.fetchall()
+        ]
+
+    # -- master data versions (R16) --
+
+    def insert_master_data_version(
+        self, version: MasterDataVersion
+    ) -> None:
+        sql = self._q(
+            "INSERT INTO master_data_versions (version_id, label, "
+            "seq, payload) VALUES (?, ?, ?, ?)"
+        )
+        self._conn.execute(
+            sql,
+            (
+                version.version_id,
+                version.label,
+                version.seq,
+                version.model_dump_json(),
+            ),
+        )
+        if self.dialect == "sqlite":
+            self._conn.commit()
+
+    def get_master_data_version(
+        self, version_id: str
+    ) -> MasterDataVersion | None:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM master_data_versions "
+                "WHERE version_id = ?"
+            ),
+            (version_id,),
+        )
+        row = cur.fetchone()
+        return (
+            MasterDataVersion.model_validate(json.loads(row[0]))
+            if row
+            else None
+        )
+
+    def list_master_data_versions(self) -> list[MasterDataVersion]:
+        cur = self._conn.execute(
+            self._q(
+                "SELECT payload FROM master_data_versions ORDER BY seq"
+            )
+        )
+        return [
+            MasterDataVersion.model_validate(json.loads(r[0]))
             for r in cur.fetchall()
         ]
 

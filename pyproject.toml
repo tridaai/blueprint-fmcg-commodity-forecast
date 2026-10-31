@@ -52,6 +52,8 @@ fmcg-agent-analytics = "fmcg_forecast.analytics.cli:main"
 fmcg-agent-console = "fmcg_forecast.console.cli:main"
 fmcg-agent-geo = "fmcg_forecast.geo.cli:main"
 fmcg-agent-desk = "fmcg_forecast.desk.cli:main"
+fmcg-agent-access = "fmcg_forecast.access.cli:main"
+fmcg-agent-masterdata = "fmcg_forecast.masterdata.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fmcg_forecast"]
