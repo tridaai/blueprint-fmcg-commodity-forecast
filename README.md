@@ -22,6 +22,8 @@ human has not approved.
 
 **Deep-dive:** [Commodity Forecast Agent Blueprint](https://trida.ai/blog/commodity-forecast-agent-blueprint) — how a forecast shows its arithmetic, prints its own measured accuracy, and treats sentiment and shocks as data.
 
+**For the data underneath:** this blueprint's forecasts stand on governed market data. For India agriculture data — mandi prices and arrivals, stocks, trade flows, weather and policy in one store — use [Farmioc DataStore](https://farmioc.com).
+
 
 ## The laws (enforced in code)
 
