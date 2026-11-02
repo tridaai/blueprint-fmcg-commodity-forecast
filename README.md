@@ -18,6 +18,11 @@ human has not approved.
 
 > **Work in progress** — this blueprint is built and passing its automated test and eval gates, but it has not yet finished hands-on local testing, and its companion blog post is not yet published. Expect changes. This notice comes off when both are done.
 
+<p><a href="https://trida.ai/blog/commodity-forecast-agent-blueprint"><img src="https://geeytzpdwvjojoie.public.blob.vercel-storage.com/blog/1793597292893-cover.webp" alt="Commodity Forecast Agent Blueprint" width="600"></a></p>
+
+**Deep-dive:** [Commodity Forecast Agent Blueprint](https://trida.ai/blog/commodity-forecast-agent-blueprint) — how a forecast shows its arithmetic, prints its own measured accuracy, and treats sentiment and shocks as data.
+
+
 ## The laws (enforced in code)
 
 1. **Forecasts are computed, never narrated.** A stated statistical engine produces
